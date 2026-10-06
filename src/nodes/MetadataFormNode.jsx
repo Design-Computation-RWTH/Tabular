@@ -3,9 +3,13 @@
  * It loads default or profile-selected shapes, tracks form validity, and emits
  * serialized RDF to connected workflow nodes when the form is submitted.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import '@ulb-darmstadt/shacl-form';
-import { fetchDefaultMetadataShapes } from '../services/metadataShapesService';
+import {
+  fetchDefaultMetadataShapes,
+  fetchExternalClassInstances,
+  fetchExternalMetadataRdf,
+} from '../services/metadataShapesService';
 import metadataFormIcon from '../assets/Architetto_--_Formulario.svg';
 import NodeHandle from './NodeHandle';
 import NodeInfoButton from './NodeInfoButton';
@@ -30,6 +34,23 @@ export default function MetadataFormNode({ id, data, selected, onRdfChange }) {
   const formKey = data.shapesKey || (data.shapes ? `profile-${data.profileBaseUri}` : 'default');
   const initialValues = data.shapes ? undefined : defaultMetadataValues;
   const initialValuesSubject = data.shapes ? undefined : defaultMetadataValuesSubject;
+  const profileInput = data.metadataProfileInput || '';
+  const unavailableProfileInputs = profileInput
+    ? ['Metadata Profile Search', 'Coscine'].filter((name) => name !== profileInput)
+    : [];
+
+  const setFormElement = useCallback((formElement) => {
+    formRef.current = formElement;
+
+    if (!formElement) {
+      return;
+    }
+
+    // owl:imports supplies scoped vocabulary graphs; sh:class can also point
+    // directly at a vocabulary. Supporting both covers AIMS and Coscine SHACL.
+    formElement.setRdfUrlResolver?.(fetchExternalMetadataRdf);
+    formElement.setClassInstanceProvider?.(fetchExternalClassInstances);
+  }, []);
 
   useEffect(() => {
     if (data.shapes) {
@@ -102,7 +123,12 @@ export default function MetadataFormNode({ id, data, selected, onRdfChange }) {
 
   return (
     <div className={`metadata-form-node${selected ? ' selected' : ''}`}>
-      <NodeHandle type="target" />
+      <NodeHandle
+        type="target"
+        accepts={['Metadata Profile Search', 'Coscine']}
+        connected={profileInput ? [profileInput] : []}
+        unavailable={unavailableProfileInputs}
+      />
       <div className="metadata-form-node__header">
         <img src={metadataFormIcon} alt="" className="metadata-form-node__icon" />
         <p className="metadata-form-node__title">{data.label}</p>
@@ -112,7 +138,7 @@ export default function MetadataFormNode({ id, data, selected, onRdfChange }) {
         {shapes ? (
           <shacl-form
             key={formKey}
-            ref={formRef}
+            ref={setFormElement}
             data-shapes={shapes}
             data-values={initialValues}
             data-values-subject={initialValuesSubject}
@@ -131,7 +157,7 @@ export default function MetadataFormNode({ id, data, selected, onRdfChange }) {
       </p>
 
       <NodeInfoButton nodeType="metadataForm" language={data.language} />
-      <NodeHandle type="source" />
+      <NodeHandle type="source" connectsTo={['RO-Crate', 'Coscine']} />
     </div>
   );
 }

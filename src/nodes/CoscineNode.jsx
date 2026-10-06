@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import coscineLogo from '../assets/coscine_rgb.svg';
 import {
   fetchCoscineApplicationProfileDefinition,
@@ -9,13 +9,29 @@ import { createROCratePackage } from '../services/roCrateExport';
 import NodeHandle from './NodeHandle';
 import NodeInfoButton from './NodeInfoButton';
 
+const coscineTokenStorageKey = 'tabular-rdm.coscine-api-token.v1';
+
+function readStoredApiToken() {
+  if (typeof window === 'undefined') return '';
+
+  try {
+    return window.localStorage.getItem(coscineTokenStorageKey) || '';
+  } catch {
+    return '';
+  }
+}
+
 export default function CoscineNode({
   id,
   data,
   selected,
   onApplicationProfileLoaded,
 }) {
-  const [apiToken, setApiToken] = useState('');
+  const [apiToken, setApiToken] = useState(readStoredApiToken);
+  const [rememberApiToken, setRememberApiToken] = useState(
+    () => Boolean(readStoredApiToken()),
+  );
+  const [tokenStorageError, setTokenStorageError] = useState('');
   const [resources, setResources] = useState([]);
   const [selectedResourceKey, setSelectedResourceKey] = useState('');
   const [isLoadingResources, setIsLoadingResources] = useState(false);
@@ -23,6 +39,14 @@ export default function CoscineNode({
   const [isUploading, setIsUploading] = useState(false);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
+  const resourceRequestIdRef = useRef(0);
+  const tokenHelpIsGerman = data.language === 'de';
+  const tokenHelpUrl = tokenHelpIsGerman
+    ? 'https://docs.coscine.de/de/token/'
+    : 'https://docs.coscine.de/en/token/';
+  const tokenHelpTitle = tokenHelpIsGerman
+    ? 'Im Coscine-Nutzendenprofil Zugriffstoken öffnen, Name und Ablaufdatum angeben, Token erstellen und sofort kopieren.'
+    : 'In your Coscine user profile, open Access Token, enter a name and expiration date, create the token, and copy it immediately.';
   const uploadMetadata = data.roCrateInput?.metadataContent?.trim() ?? '';
   const canBuildCrate = Boolean(data.roCrateInput?.jsonLdContent?.jsonLd?.trim());
   const hasUploadMetadata = Boolean(uploadMetadata);
@@ -31,13 +55,61 @@ export default function CoscineNode({
     [resources, selectedResourceKey],
   );
 
-  const handleLoadResources = useCallback(async () => {
+  useEffect(() => {
+    if (!rememberApiToken) return;
+
+    try {
+      if (apiToken) {
+        window.localStorage.setItem(coscineTokenStorageKey, apiToken);
+      } else {
+        window.localStorage.removeItem(coscineTokenStorageKey);
+      }
+      setTokenStorageError('');
+    } catch {
+      setTokenStorageError('The token could not be saved in this browser.');
+    }
+  }, [apiToken, rememberApiToken]);
+
+  const handleRememberApiTokenChange = useCallback(
+    (event) => {
+      const shouldRemember = event.target.checked;
+      let nextRememberState = shouldRemember;
+
+      try {
+        if (shouldRemember && apiToken) {
+          window.localStorage.setItem(coscineTokenStorageKey, apiToken);
+        } else {
+          window.localStorage.removeItem(coscineTokenStorageKey);
+        }
+        setTokenStorageError('');
+      } catch {
+        nextRememberState = !shouldRemember;
+        setTokenStorageError(
+          shouldRemember
+            ? 'The token could not be saved in this browser.'
+            : 'The stored token could not be removed from this browser.',
+        );
+      }
+
+      setRememberApiToken(nextRememberState);
+    },
+    [apiToken],
+  );
+
+  const loadResources = useCallback(async (token) => {
+    const requestId = resourceRequestIdRef.current + 1;
+    resourceRequestIdRef.current = requestId;
     setIsLoadingResources(true);
     setError('');
     setStatus('Loading resources...');
 
     try {
-      const resourceOptions = await fetchCoscineResourceOptions(apiToken);
+      const resourceOptions = await fetchCoscineResourceOptions(token);
+
+      if (resourceRequestIdRef.current !== requestId) {
+        return;
+      }
+
       const options = resourceOptions.map((resource) => ({
         ...resource,
         key: `${resource.projectId}:${resource.resourceId}`,
@@ -55,12 +127,42 @@ export default function CoscineNode({
           : 'No writable resources found for this token.',
       );
     } catch (loadError) {
+      if (resourceRequestIdRef.current !== requestId) {
+        return;
+      }
+
       setError(loadError.message || 'Could not load Coscine resources.');
       setStatus('');
     } finally {
-      setIsLoadingResources(false);
+      if (resourceRequestIdRef.current === requestId) {
+        setIsLoadingResources(false);
+      }
     }
-  }, [apiToken]);
+  }, []);
+
+  useEffect(() => {
+    resourceRequestIdRef.current += 1;
+    setResources([]);
+    setSelectedResourceKey('');
+    setIsLoadingResources(false);
+
+    const token = apiToken.trim();
+
+    if (!token) {
+      setError('');
+      setStatus('Enter an API token to load resources automatically.');
+      return undefined;
+    }
+
+    setError('');
+    setStatus('API token detected. Loading resources...');
+    const timeoutId = window.setTimeout(() => loadResources(token), 500);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      resourceRequestIdRef.current += 1;
+    };
+  }, [apiToken, loadResources]);
 
   useEffect(() => {
     if (!selectedResource || !apiToken.trim()) {
@@ -89,7 +191,7 @@ export default function CoscineNode({
           projectId: selectedResource.projectId,
           projectName: selectedResource.projectName,
         });
-        setStatus(`Loaded form for ${selectedResource.resourceName}.`);
+        setStatus('');
       })
       .catch((profileError) => {
         if (!isActive) {
@@ -150,13 +252,27 @@ export default function CoscineNode({
 
   return (
     <div className={`coscine-node${selected ? ' selected' : ''}`}>
-      <NodeHandle type="target" />
+      <NodeHandle type="target" accepts={['RO-Crate', 'Metadata Form']} />
       <div className="coscine-node__header">
         <img src={coscineLogo} alt="" className="coscine-node__icon" />
         <p className="coscine-node__title">{data.label}</p>
       </div>
       <label className="coscine-node__label">
-        API token
+        <span className="coscine-node__label-heading">
+          <span>API token</span>
+          <a
+            className="coscine-node__help-link nodrag nopan"
+            href={tokenHelpUrl}
+            target="_blank"
+            rel="noreferrer"
+            title={tokenHelpTitle}
+            aria-label={`${
+              tokenHelpIsGerman ? 'So erstellst du ein Coscine-API-Token' : 'How to get a Coscine API token'
+            } (${tokenHelpIsGerman ? 'öffnet einen neuen Tab' : 'opens in a new tab'})`}
+          >
+            {tokenHelpIsGerman ? 'Token erstellen ↗' : 'How to get one ↗'}
+          </a>
+        </span>
         <input
           className="coscine-node__input nodrag"
           type="password"
@@ -166,20 +282,23 @@ export default function CoscineNode({
           onChange={(event) => setApiToken(event.target.value)}
         />
       </label>
-      <button
-        type="button"
-        className="coscine-node__button nodrag"
-        disabled={isLoadingResources || !apiToken.trim()}
-        onClick={handleLoadResources}
-      >
-        {isLoadingResources ? 'Loading...' : 'Load resources'}
-      </button>
+      <label className="coscine-node__remember nodrag">
+        <input
+          type="checkbox"
+          checked={rememberApiToken}
+          onChange={handleRememberApiTokenChange}
+        />
+        Remember token in this browser
+      </label>
+      {tokenStorageError ? (
+        <p className="coscine-node__storage-error">{tokenStorageError}</p>
+      ) : null}
       <label className="coscine-node__label">
         Resource
         <select
           className="coscine-node__select nodrag"
           value={selectedResourceKey}
-          disabled={resources.length === 0}
+          disabled={isLoadingResources || resources.length === 0}
           onChange={(event) => setSelectedResourceKey(event.target.value)}
         >
           <option value="">Select a resource</option>
@@ -211,7 +330,7 @@ export default function CoscineNode({
       </p>
       {error ? <p className="coscine-node__error">{error}</p> : null}
       <NodeInfoButton nodeType="coscine" language={data.language} />
-      <NodeHandle type="source" />
+      <NodeHandle type="source" connectsTo={['Metadata Form']} />
     </div>
   );
 }

@@ -16,19 +16,19 @@ import PreviewTabularDataNode from './nodes/PreviewTabularDataNode';
 import ColumnDescriptionNode from './nodes/ColumnDescriptionNode';
 import MetadataFormNode from './nodes/MetadataFormNode';
 import MetadataProfileSearchNode from './nodes/MetadataProfileSearchNode';
-import RDFStoreNode from './nodes/RDFStoreNode';
 import ROCrateNode from './nodes/ROCrateNode';
 import QuantityKindNode from './nodes/QuantityKindNode';
 import UnitNode from './nodes/UnitNode';
+import TerminologyNode, { TERMINOLOGY_LOGO_URL } from './nodes/TerminologyNode';
 import CoscineNode from './nodes/CoscineNode';
 import { fetchAimsApplicationProfileDefinition } from './services/aimsApi';
 import { serializeColumnDescriptionsToTurtle } from './services/columnDescriptionRdf';
+import { serializeTabularDataInWorker } from './services/tabularDataRdfService';
 import tabularFileIcon from './assets/tabular-file-icon.png';
 import spreadsheetIcon from './assets/matt-icons_text-x-office-generic-spreadsheet.svg';
 import tabularSchemaIcon from './assets/tabular_schema.png';
 import metadataFormIcon from './assets/Architetto_--_Formulario.svg';
 import aimsIcon from './assets/aims.png';
-import rdfLogo from './assets/250px-Rdf_logo.svg.png';
 import roCrateLogo from './assets/RO-Crate.png';
 import qudtAvatar from './assets/qudt-avatar.jpg';
 import coscineLogo from './assets/coscine_rgb.svg';
@@ -37,6 +37,9 @@ import nfdi4ingLogo from './assets/nfdi4ing_24.svg';
 
 const nodeHandlers = {
   onTabularLoaded: undefined,
+  onTabularHasHeaderChange: undefined,
+  onTabularTransposeChange: undefined,
+  onTabularRdfConversionChange: undefined,
   onColumnDescriptionFieldsChange: undefined,
   onMetadataRdfChange: undefined,
   onProfileSelect: undefined,
@@ -45,7 +48,15 @@ const nodeHandlers = {
 };
 
 function TabularFileNodeType(props) {
-  return <TabularFileNode {...props} onTabularLoaded={nodeHandlers.onTabularLoaded} />;
+  return (
+    <TabularFileNode
+      {...props}
+      onTabularLoaded={nodeHandlers.onTabularLoaded}
+      onHasHeaderChange={nodeHandlers.onTabularHasHeaderChange}
+      onTransposeChange={nodeHandlers.onTabularTransposeChange}
+      onRdfConversionChange={nodeHandlers.onTabularRdfConversionChange}
+    />
+  );
 }
 
 function ColumnDescriptionNodeType(props) {
@@ -97,69 +108,80 @@ const nodeTypes = {
   profileSearch: MetadataProfileSearchNodeType,
   quantityKind: QuantityKindNodeType,
   unit: UnitNode,
-  rdfStore: RDFStoreNode,
+  terminology: TerminologyNode,
   roCrate: ROCrateNode,
   coscine: CoscineNodeType,
 };
 
-const initialNodes = [
-  {
-    id: 'tabular-source',
-    type: 'tabularFile',
-    position: { x: 40, y: 80 },
-    data: { label: 'Tabular file 1', language: 'en' },
-  },
-  {
-    id: 'tabular',
-    type: 'previewTabular',
-    position: { x: 280, y: 80 },
-    data: { label: 'Preview Tabular Data 1', language: 'en' },
-  },
-];
-
 const tabularPreviewEdgeStyle = { stroke: '#2563eb', strokeWidth: 2 };
-const savedLayoutsStorageKey = 'tabular-rdm.saved-layouts.v1';
-
 /**
  * Highlights connections that carry workflow data between compatible nodes.
  * The styling is visual only; data propagation is handled by deriveNodeData().
  */
-function applySemanticEdgeStyle(edge, nodes) {
+function getEdgeLabel(sourceType, targetType) {
+  if (sourceType === 'metadataForm' && targetType === 'roCrate') return 'metadata';
+  if (sourceType === 'metadataForm' && targetType === 'coscine') return 'metadata';
+  if (sourceType === 'columnDescription' && targetType === 'roCrate') {
+    return 'column description';
+  }
+  if (sourceType === 'headerSchema' && targetType === 'roCrate') {
+    return 'column description';
+  }
+  if (
+    sourceType === 'tabularFile' &&
+    ['previewTabular', 'columnDescription', 'headerSchema', 'roCrate'].includes(
+      targetType,
+    )
+  ) {
+    return 'file';
+  }
+  if (sourceType === 'quantityKind' && targetType === 'unit') return 'unit';
+  if (sourceType === 'profileSearch' && targetType === 'metadataForm') {
+    return 'metadata profile';
+  }
+  if (sourceType === 'coscine' && targetType === 'metadataForm') {
+    return 'metadata profile';
+  }
+  if (sourceType === 'roCrate' && targetType === 'coscine') return 'RO-Crate';
+  return '';
+}
+
+function applySemanticEdgeStyle(edge, nodes, invalidated = false) {
   const nodeTypesById = new Map(nodes.map((node) => [node.id, node.type]));
+  const sourceType = nodeTypesById.get(edge.source);
+  const targetType = nodeTypesById.get(edge.target);
+  const label = getEdgeLabel(sourceType, targetType);
 
   if (
-    (nodeTypesById.get(edge.source) === 'tabularFile' &&
+    (sourceType === 'tabularFile' &&
       ['previewTabular', 'columnDescription', 'headerSchema'].includes(
-        nodeTypesById.get(edge.target),
+        targetType,
       )) ||
-    (nodeTypesById.get(edge.source) === 'metadataForm' &&
-      nodeTypesById.get(edge.target) === 'rdfStore') ||
-    (['columnDescription', 'headerSchema'].includes(nodeTypesById.get(edge.source)) &&
-      nodeTypesById.get(edge.target) === 'rdfStore') ||
-    (nodeTypesById.get(edge.source) === 'profileSearch' &&
-      nodeTypesById.get(edge.target) === 'metadataForm') ||
-    (nodeTypesById.get(edge.source) === 'quantityKind' &&
-      nodeTypesById.get(edge.target) === 'unit') ||
+    (sourceType === 'profileSearch' && targetType === 'metadataForm') ||
+    (sourceType === 'quantityKind' && targetType === 'unit') ||
     ([
       'tabularFile',
-      'previewTabular',
-      'rdfStore',
       'metadataForm',
       'columnDescription',
       'headerSchema',
-    ].includes(nodeTypesById.get(edge.source)) &&
-      nodeTypesById.get(edge.target) === 'roCrate') ||
-    (nodeTypesById.get(edge.source) === 'roCrate' &&
-      nodeTypesById.get(edge.target) === 'coscine') ||
-    (nodeTypesById.get(edge.source) === 'coscine' &&
-      nodeTypesById.get(edge.target) === 'metadataForm')
+    ].includes(sourceType) && targetType === 'roCrate') ||
+    (sourceType === 'roCrate' && targetType === 'coscine') ||
+    (sourceType === 'coscine' && targetType === 'metadataForm') ||
+    (sourceType === 'metadataForm' && targetType === 'coscine')
   ) {
+    const color = invalidated ? '#dc2626' : tabularPreviewEdgeStyle.stroke;
     return {
       ...edge,
-      animated: true,
+      animated: !invalidated,
+      label: invalidated ? `${label} (inactive)` : label,
+      labelStyle: { fill: color, fontSize: 12, fontWeight: 600 },
+      labelBgStyle: { fill: '#ffffff', fillOpacity: 0.9 },
+      labelBgPadding: [4, 2],
+      labelBgBorderRadius: 4,
       style: {
-        ...edge.style,
         ...tabularPreviewEdgeStyle,
+        stroke: color,
+        strokeDasharray: invalidated ? '7 5' : undefined,
       },
     };
   }
@@ -167,22 +189,271 @@ function applySemanticEdgeStyle(edge, nodes) {
   return edge;
 }
 
-const initialEdges = [
-  applySemanticEdgeStyle(
-    { id: 'e1-2', source: 'tabular-source', target: 'tabular', animated: true },
-    initialNodes,
-  ),
-];
+function isSupportedConnection(connection, nodes, edges = []) {
+  const nodeTypesById = new Map(nodes.map((node) => [node.id, node.type]));
+  const sourceType = nodeTypesById.get(connection.source);
+  const targetType = nodeTypesById.get(connection.target);
+
+  if (
+    ['profileSearch', 'coscine'].includes(sourceType) &&
+    targetType === 'metadataForm'
+  ) {
+    const alreadyHasProfileInput = edges.some(
+      (edge) =>
+        edge.target === connection.target &&
+        ['profileSearch', 'coscine'].includes(nodeTypesById.get(edge.source)),
+    );
+
+    if (alreadyHasProfileInput) {
+      return false;
+    }
+  }
+
+  return (
+    (sourceType === 'tabularFile' &&
+      ['previewTabular', 'columnDescription', 'headerSchema', 'roCrate'].includes(
+        targetType,
+      )) ||
+    (['columnDescription', 'headerSchema'].includes(sourceType) &&
+      targetType === 'roCrate') ||
+    (sourceType === 'quantityKind' && targetType === 'unit') ||
+    (sourceType === 'profileSearch' && targetType === 'metadataForm') ||
+    (sourceType === 'metadataForm' && targetType === 'roCrate') ||
+    (sourceType === 'metadataForm' && targetType === 'coscine') ||
+    (sourceType === 'roCrate' && targetType === 'coscine') ||
+    (sourceType === 'coscine' && targetType === 'metadataForm')
+  );
+}
+
+function annotateMetadataFormProfileInputs(nodes, edges) {
+  const nodeTypesById = new Map(nodes.map((node) => [node.id, node.type]));
+  const inputByFormId = new Map();
+
+  // A Coscine resource profile takes precedence over an AIMS profile. The
+  // retained AIMS edge is styled as inactive elsewhere in the workflow.
+  for (const sourceType of ['profileSearch', 'coscine']) {
+    for (const edge of edges) {
+      if (
+        nodeTypesById.get(edge.source) === sourceType &&
+        nodeTypesById.get(edge.target) === 'metadataForm'
+      ) {
+        inputByFormId.set(
+          edge.target,
+          sourceType === 'coscine' ? 'Coscine' : 'Metadata Profile Search',
+        );
+      }
+    }
+  }
+
+  return nodes.map((node) =>
+    node.type === 'metadataForm'
+      ? {
+          ...node,
+          data: {
+            ...node.data,
+            metadataProfileInput: inputByFormId.get(node.id) || '',
+          },
+        }
+      : node,
+  );
+}
+
+function styleWorkflowEdges(edges, nodes) {
+  const nodeTypesById = new Map(nodes.map((node) => [node.id, node.type]));
+  const coscineFormIds = new Set(
+    edges
+      .filter(
+        (edge) =>
+          nodeTypesById.get(edge.source) === 'coscine' &&
+          nodeTypesById.get(edge.target) === 'metadataForm',
+      )
+      .map((edge) => edge.target),
+  );
+
+  return edges.map((edge) =>
+    applySemanticEdgeStyle(
+      edge,
+      nodes,
+      nodeTypesById.get(edge.source) === 'profileSearch' &&
+        coscineFormIds.has(edge.target),
+    ),
+  );
+}
+
+function protectCoscineMetadataConnections(changes, edges, nodes) {
+  const nodeTypesById = new Map(nodes.map((node) => [node.id, node.type]));
+  const edgeById = new Map(edges.map((edge) => [edge.id, edge]));
+  const removedEdgeIds = new Set(
+    changes.filter((change) => change.type === 'remove').map((change) => change.id),
+  );
+  let rejectedRemoval = false;
+
+  const allowedChanges = changes.filter((change) => {
+    if (change.type !== 'remove') return true;
+
+    const edge = edgeById.get(change.id);
+    if (!edge) return true;
+
+    const sourceType = nodeTypesById.get(edge.source);
+    const targetType = nodeTypesById.get(edge.target);
+    const coscineMetadataConnection =
+      (sourceType === 'coscine' && targetType === 'metadataForm') ||
+      (sourceType === 'metadataForm' && targetType === 'coscine');
+
+    if (!coscineMetadataConnection) {
+      return true;
+    }
+
+    const coscineNodeId = sourceType === 'coscine' ? edge.source : edge.target;
+
+    const coscineIsStillUsed = edges.some(
+      (candidate) =>
+        !removedEdgeIds.has(candidate.id) &&
+        candidate.target === coscineNodeId &&
+        nodeTypesById.get(candidate.source) === 'roCrate',
+    );
+
+    if (coscineIsStillUsed) {
+      rejectedRemoval = true;
+      return false;
+    }
+
+    return true;
+  });
+
+  return { allowedChanges, rejectedRemoval };
+}
+
+function createWorkflowTemplate(templateType, language) {
+  const nodes = [
+    {
+      id: 'template-tabular',
+      type: 'tabularFile',
+      position: { x: 520, y: 450 },
+      data: {
+        label: 'Tabular file 1',
+        language,
+        hasHeader: true,
+        transpose: false,
+      },
+    },
+    {
+      id: 'template-preview',
+      type: 'previewTabular',
+      position: { x: 520, y: 60 },
+      data: { label: 'Preview Tabular Data 1', language },
+    },
+    {
+      id: 'template-columns',
+      type: 'columnDescription',
+      position: { x: 1040, y: 60 },
+      data: { label: 'Column Descriptions 1', language, fields: [] },
+    },
+    {
+      id: 'template-quantity-kinds',
+      type: 'quantityKind',
+      position: { x: 40, y: 760 },
+      data: { label: 'Quantity Kinds 1', language },
+    },
+    {
+      id: 'template-units',
+      type: 'unit',
+      position: { x: 520, y: 760 },
+      data: { label: 'Units 1', language },
+    },
+    {
+      id: 'template-terminology',
+      type: 'terminology',
+      position: { x: 40, y: 40 },
+      data: { label: 'Terminology Service 1', language },
+    },
+    {
+      id: 'template-metadata-form',
+      type: 'metadataForm',
+      position: { x: 1480, y: 760 },
+      data: { label: 'Metadata Form 1', language },
+    },
+    {
+      id: 'template-ro-crate',
+      type: 'roCrate',
+      position: { x: 1650, y: 100 },
+      data: { label: 'RO-Crate 1', language },
+    },
+  ];
+  const edges = [
+    { id: 'template-file-preview', source: 'template-tabular', target: 'template-preview' },
+    { id: 'template-file-columns', source: 'template-tabular', target: 'template-columns' },
+    { id: 'template-file-crate', source: 'template-tabular', target: 'template-ro-crate' },
+    { id: 'template-columns-crate', source: 'template-columns', target: 'template-ro-crate' },
+    {
+      id: 'template-quantity-units',
+      source: 'template-quantity-kinds',
+      target: 'template-units',
+    },
+  ];
+
+  if (templateType === 'coscine') {
+    nodes.push({
+      id: 'template-coscine',
+      type: 'coscine',
+      position: { x: 2400, y: 760 },
+      data: { label: 'Coscine 1', language },
+    });
+    edges.push(
+      {
+        id: 'template-crate-coscine',
+        source: 'template-ro-crate',
+        target: 'template-coscine',
+      },
+      {
+        id: 'template-coscine-form',
+        source: 'template-coscine',
+        target: 'template-metadata-form',
+      },
+      {
+        id: 'template-form-coscine',
+        source: 'template-metadata-form',
+        target: 'template-coscine',
+      },
+    );
+  } else {
+    nodes.push({
+      id: 'template-profile-search',
+      type: 'profileSearch',
+      position: { x: 1000, y: 760 },
+      data: { label: 'Metadata Profile Search 1', language },
+    });
+    edges.push(
+      {
+        id: 'template-profile-form',
+        source: 'template-profile-search',
+        target: 'template-metadata-form',
+      },
+      {
+        id: 'template-form-crate',
+        source: 'template-metadata-form',
+        target: 'template-ro-crate',
+      },
+    );
+  }
+
+  return { nodes, edges: styleWorkflowEdges(edges, nodes) };
+}
+
+const defaultStartupWorkflow = createWorkflowTemplate('coscine', 'en');
 
 const nodeTemplates = [
   { type: 'tabularFile', label: 'Tabular file', icon: tabularFileIcon },
   { type: 'previewTabular', label: 'Preview Tabular Data', icon: spreadsheetIcon },
-  { type: 'columnDescription', label: 'Column Description', icon: tabularSchemaIcon },
-  { type: 'quantityKind', label: 'Quantity Kinds', icon: qudtAvatar },
-  { type: 'unit', label: 'Units', icon: qudtAvatar },
+  { type: 'columnDescription', label: 'Column Descriptions', icon: tabularSchemaIcon },
+  { type: 'terminology', label: 'Terminology Service', icon: TERMINOLOGY_LOGO_URL },
+  {
+    type: 'quantityKindAndUnit',
+    label: 'Quantity Kinds + Units',
+    icon: qudtAvatar,
+  },
   { type: 'profileSearch', label: 'Metadata Profile Search', icon: aimsIcon },
   { type: 'metadataForm', label: 'Metadata Form', icon: metadataFormIcon },
-  { type: 'rdfStore', label: 'RDF Store', icon: rdfLogo },
   { type: 'roCrate', label: 'RO-Crate', icon: roCrateLogo },
   { type: 'coscine', label: 'Coscine', icon: coscineLogo },
 ];
@@ -204,74 +475,25 @@ const appText = {
   en: {
     sidebarHeading: 'Tabular Data Management',
     sidebarIntro: 'Drag a button into the canvas to create a node where you drop it.',
-    savedLayoutsHeading: 'Saved layouts',
-    layoutNameLabel: 'Layout name',
-    layoutNamePlaceholder: 'My workflow layout',
-    saveLayout: 'Save',
-    loadLayout: 'Load',
-    deleteLayout: 'Delete',
-    noSavedLayouts: 'No saved layouts',
-    selectSavedLayout: 'Select a saved layout',
-    layoutSaved: 'Layout saved in this browser.',
-    layoutLoaded: 'Layout loaded.',
-    layoutDeleted: 'Layout deleted.',
-    layoutNameRequired: 'Enter a name first.',
-    layoutSelectionRequired: 'Select a saved layout first.',
-    layoutLoadFailed: 'Could not load the saved layout.',
+    templatesHeading: 'Workflow templates',
+    templatesIntro: 'Choose a starting workflow. This replaces the current canvas.',
+    coscineTemplate: 'Coscine workflow',
+    coscineTemplateDescription: 'Prepare an RO-Crate and deposit it with Coscine metadata.',
+    roCrateTemplate: 'RO-Crate workflow',
+    roCrateTemplateDescription: 'Use Metadata Profile Search and package the result locally.',
   },
   de: {
     sidebarHeading: 'Management von tabellarischen Daten',
     sidebarIntro:
       'Ziehe eine Schaltfläche auf die Arbeitsfläche, um an der Stelle, an der du sie ablegst, einen Knoten zu erstellen.',
-    savedLayoutsHeading: 'Gespeicherte Layouts',
-    layoutNameLabel: 'Layoutname',
-    layoutNamePlaceholder: 'Mein Workflow-Layout',
-    saveLayout: 'Speichern',
-    loadLayout: 'Laden',
-    deleteLayout: 'Loeschen',
-    noSavedLayouts: 'Keine gespeicherten Layouts',
-    selectSavedLayout: 'Gespeichertes Layout auswaehlen',
-    layoutSaved: 'Layout in diesem Browser gespeichert.',
-    layoutLoaded: 'Layout geladen.',
-    layoutDeleted: 'Layout geloescht.',
-    layoutNameRequired: 'Gib zuerst einen Namen ein.',
-    layoutSelectionRequired: 'Waehle zuerst ein gespeichertes Layout aus.',
-    layoutLoadFailed: 'Das gespeicherte Layout konnte nicht geladen werden.',
+    templatesHeading: 'Workflow-Vorlagen',
+    templatesIntro: 'Waehle einen Start-Workflow. Die aktuelle Arbeitsflaeche wird ersetzt.',
+    coscineTemplate: 'Coscine-Workflow',
+    coscineTemplateDescription: 'RO-Crate vorbereiten und mit Coscine-Metadaten ablegen.',
+    roCrateTemplate: 'RO-Crate-Workflow',
+    roCrateTemplateDescription: 'Metadata Profile Search nutzen und das Ergebnis lokal paketieren.',
   },
 };
-
-function readSavedLayouts() {
-  if (typeof window === 'undefined') {
-    return [];
-  }
-
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(savedLayoutsStorageKey) || '[]');
-    return Array.isArray(parsed)
-      ? parsed.filter((layout) => layout && typeof layout.name === 'string')
-      : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeSavedLayouts(layouts) {
-  window.localStorage.setItem(savedLayoutsStorageKey, JSON.stringify(layouts));
-}
-
-function cleanNodeForStorage(node) {
-  const { dragging, selected, resizing, ...storedNode } = node;
-  return storedNode;
-}
-
-function cleanEdgeForStorage(edge) {
-  const { selected, ...storedEdge } = edge;
-  return storedEdge;
-}
-
-function restoreSavedEdges(edges, nodes) {
-  return edges.map((edge) => applySemanticEdgeStyle(cleanEdgeForStorage(edge), nodes));
-}
 
 /**
  * Creates editable column-description rows from spreadsheet headers while
@@ -288,8 +510,11 @@ function buildColumnDescriptionFields(headers, previousFields = []) {
     return {
       header,
       description: existing?.description ?? '',
+      descriptionUri: existing?.descriptionUri ?? '',
+      descriptionLanguage: existing?.descriptionLanguage ?? '',
       unit: existing?.unit ?? '',
       unitUri: existing?.unitUri ?? '',
+      unitLanguage: existing?.unitLanguage ?? '',
     };
   });
 }
@@ -299,13 +524,6 @@ function buildNodeTypeCounts(nodes) {
     counts[node.type] = (counts[node.type] ?? 0) + 1;
     return counts;
   }, {});
-}
-
-function getNextNodeIdCount(nodes) {
-  return nodes.reduce((highest, node) => {
-    const match = /^node-(\d+)$/.exec(node.id);
-    return match ? Math.max(highest, Number(match[1])) : highest;
-  }, initialNodes.length);
 }
 
 function normalizeCellValue(value) {
@@ -324,12 +542,61 @@ function isEmptyRow(row) {
   return row.every((cell) => normalizeCellValue(cell).trim().length === 0);
 }
 
+function getEffectiveColumnCount(row) {
+  for (let index = row.length - 1; index >= 0; index -= 1) {
+    if (normalizeCellValue(row[index]).trim().length > 0) {
+      return index + 1;
+    }
+  }
+
+  return 0;
+}
+
+function readWorksheetRows(worksheet, transpose = false) {
+  const rows = XLSX.utils.sheet_to_json(worksheet, {
+    header: 1,
+    blankrows: transpose,
+    defval: '',
+    raw: false,
+  });
+  let usableRows;
+
+  if (transpose) {
+    const initialColumnCount = getEffectiveColumnCount(rows[0] ?? []);
+    const stopIndex = rows.findIndex(
+      (row) =>
+        isEmptyRow(row) || getEffectiveColumnCount(row) !== initialColumnCount,
+    );
+    usableRows = rows.slice(0, stopIndex < 0 ? rows.length : stopIndex);
+  } else {
+    usableRows = rows.filter((row) => Array.isArray(row) && !isEmptyRow(row));
+  }
+
+  if (!transpose || usableRows.length === 0) {
+    return usableRows;
+  }
+
+  const columnCount = usableRows.reduce(
+    (maxColumns, row) => Math.max(maxColumns, row.length),
+    0,
+  );
+
+  return Array.from({ length: columnCount }, (_, columnIndex) =>
+    usableRows.map((row) => normalizeCellValue(row[columnIndex])),
+  );
+}
+
 /**
  * Parses a loaded workbook into two shapes:
  * - a small first-sheet preview used by preview/description nodes
  * - all sheets as row objects for later RO-Crate CSV export
  */
-function parseTabularWorkbook(buffer, previewRowCount = 5) {
+function parseTabularWorkbook(
+  buffer,
+  previewRowCount = 5,
+  hasHeader = true,
+  transpose = false,
+) {
   const workbook = XLSX.read(buffer, {
     type: 'array',
     cellDates: true,
@@ -341,21 +608,32 @@ function parseTabularWorkbook(buffer, previewRowCount = 5) {
   }
 
   const worksheet = workbook.Sheets[sheetName];
-  const tableRows = XLSX.utils
-    .sheet_to_json(worksheet, {
-      header: 1,
-      blankrows: false,
-      defval: '',
-      raw: false,
-    })
-    .filter((row) => Array.isArray(row) && !isEmptyRow(row));
-  const sheets = workbook.SheetNames.map((name) => ({
-    name,
-    rows: XLSX.utils.sheet_to_json(workbook.Sheets[name], {
-      defval: '',
-      raw: false,
-    }),
-  }));
+  const tableRows = readWorksheetRows(worksheet, transpose);
+  const sheets = workbook.SheetNames.map((name) => {
+    const sheetRows = readWorksheetRows(workbook.Sheets[name], transpose);
+    const sheetColumnCount = sheetRows.reduce(
+      (maxColumns, row) => Math.max(maxColumns, row.length),
+      0,
+    );
+    const sheetHeaders = hasHeader
+      ? Array.from({ length: sheetColumnCount }, (_, index) =>
+          normalizeCellValue(sheetRows[0]?.[index]),
+        )
+      : Array.from(
+          { length: sheetColumnCount },
+          (_, index) => `Column ${index + 1}`,
+        );
+    const firstSheetDataRow = hasHeader ? 1 : 0;
+
+    return {
+      name,
+      rows: sheetRows.slice(firstSheetDataRow).map((row) =>
+        Object.fromEntries(
+          sheetHeaders.map((header, index) => [header, normalizeCellValue(row[index])]),
+        ),
+      ),
+    };
+  });
 
   if (tableRows.length === 0) {
     return { headers: [], rows: [], rowCount: 0, sheetName, sheets };
@@ -365,14 +643,23 @@ function parseTabularWorkbook(buffer, previewRowCount = 5) {
     (maxColumns, row) => Math.max(maxColumns, row.length),
     0,
   );
-  const headers = Array.from({ length: columnCount }, (_, index) =>
-    normalizeCellValue(tableRows[0][index]),
-  );
-  const rows = tableRows.slice(1, previewRowCount + 1).map((row) =>
+  const headers = hasHeader
+    ? Array.from({ length: columnCount }, (_, index) =>
+        normalizeCellValue(tableRows[0][index]),
+      )
+    : Array.from({ length: columnCount }, (_, index) => `Column ${index + 1}`);
+  const firstDataRow = hasHeader ? 1 : 0;
+  const rows = tableRows.slice(firstDataRow, firstDataRow + previewRowCount).map((row) =>
     Array.from({ length: columnCount }, (_, index) => normalizeCellValue(row[index])),
   );
 
-  return { headers, rows, rowCount: Math.max(tableRows.length - 1, 0), sheetName, sheets };
+  return {
+    headers,
+    rows,
+    rowCount: Math.max(tableRows.length - firstDataRow, 0),
+    sheetName,
+    sheets,
+  };
 }
 
 /**
@@ -507,51 +794,6 @@ function getConnectedMetadataFormIds(nodes, edges, profileSearchNodeId) {
 }
 
 /**
- * Collects serialized RDF from metadata-producing nodes connected to RDF Store
- * nodes. RDF Store nodes consume the combined Turtle string via data.rdfInput.
- */
-function propagateMetadataRdf(nodes, edges) {
-  const nodeTypesById = new Map(nodes.map((node) => [node.id, node.type]));
-  const nodeDataById = new Map(nodes.map((node) => [node.id, node.data]));
-  const rdfInputsByNodeId = new Map();
-
-  for (const edge of edges) {
-    if (nodeTypesById.get(edge.target) !== 'rdfStore') {
-      continue;
-    }
-
-    if (
-      !['metadataForm', 'columnDescription', 'headerSchema'].includes(
-        nodeTypesById.get(edge.source),
-      )
-    ) {
-      continue;
-    }
-
-    const serializedRdf = nodeDataById.get(edge.source)?.serializedRdf || '';
-
-    if (serializedRdf) {
-      const existingInputs = rdfInputsByNodeId.get(edge.target) ?? [];
-      rdfInputsByNodeId.set(edge.target, [...existingInputs, serializedRdf]);
-    }
-  }
-
-  return nodes.map((node) => {
-    if (node.type !== 'rdfStore') {
-      return node;
-    }
-
-    return {
-      ...node,
-      data: {
-        ...node.data,
-        rdfInput: (rdfInputsByNodeId.get(node.id) ?? []).join('\n\n'),
-      },
-    };
-  });
-}
-
-/**
  * Applies the selected Quantity Kind as a filter for connected Unit nodes.
  */
 function propagateQuantityKindToUnits(nodes, edges) {
@@ -606,12 +848,11 @@ function propagateROCrateInputs(nodes, edges) {
 
     const sourceType = nodeTypesById.get(edge.source);
     const sourceData = nodeDataById.get(edge.source) ?? {};
-    const rdfContent =
-      sourceType === 'rdfStore'
-        ? sourceData.rdfInput
-        : ['metadataForm', 'columnDescription', 'headerSchema'].includes(sourceType)
-          ? sourceData.serializedRdf
-          : '';
+    const rdfContent = ['metadataForm', 'columnDescription', 'headerSchema'].includes(sourceType)
+      ? sourceData.serializedRdf
+      : sourceType === 'tabularFile' && sourceData.convertDataToRdf
+        ? sourceData.serializedDataRdf
+        : '';
 
     if (rdfContent) {
       const existingInputs = rdfInputsByNodeId.get(edge.target) ?? [];
@@ -658,7 +899,25 @@ function propagateCoscineInputs(nodes, edges) {
       });
     }
 
-    if (sourceType === 'coscine' && targetType === 'metadataForm') {
+    if (sourceType === 'metadataForm' && targetType === 'coscine') {
+      const serializedRdf = nodeDataById.get(edge.source)?.serializedRdf || '';
+
+      if (serializedRdf) {
+        const existingInputs = metadataInputsByCoscineId.get(edge.target) ?? [];
+        metadataInputsByCoscineId.set(edge.target, [...existingInputs, serializedRdf]);
+      }
+    }
+  }
+
+  // Older saved layouts used the profile edge in both directions. Keep them
+  // functional until the workflow is reconnected and gains the explicit
+  // Metadata Form -> Coscine edge.
+  for (const edge of edges) {
+    if (
+      nodeTypesById.get(edge.source) === 'coscine' &&
+      nodeTypesById.get(edge.target) === 'metadataForm' &&
+      !metadataInputsByCoscineId.has(edge.source)
+    ) {
       const serializedRdf = nodeDataById.get(edge.target)?.serializedRdf || '';
 
       if (serializedRdf) {
@@ -755,38 +1014,70 @@ function propagateCoscineApplicationProfiles(nodes, edges) {
   });
 }
 
+function propagateProfileSearchValidity(nodes, edges) {
+  const nodeTypesById = new Map(nodes.map((node) => [node.id, node.type]));
+  const coscineFormIds = new Set(
+    edges
+      .filter(
+        (edge) =>
+          nodeTypesById.get(edge.source) === 'coscine' &&
+          nodeTypesById.get(edge.target) === 'metadataForm',
+      )
+      .map((edge) => edge.target),
+  );
+
+  return nodes.map((node) => {
+    if (node.type !== 'profileSearch') return node;
+
+    const invalidated = edges.some(
+      (edge) => edge.source === node.id && coscineFormIds.has(edge.target),
+    );
+
+    return {
+      ...node,
+      data: {
+        ...node.data,
+        invalidated,
+      },
+    };
+  });
+}
+
 /**
  * Central recomputation pipeline for derived node data. Call this after any
  * node or edge change that may affect previews, RDF, units, or RO-Crate inputs.
  */
 function deriveNodeData(nodes, edges, tabularMemory) {
   const flowNodes = recalculateFlows(nodes, edges, tabularMemory);
-  const nodesWithMetadata = propagateMetadataRdf(flowNodes, edges);
-  const nodesWithUnits = propagateQuantityKindToUnits(nodesWithMetadata, edges);
+  const nodesWithUnits = propagateQuantityKindToUnits(flowNodes, edges);
   const nodesWithROCrate = propagateROCrateInputs(nodesWithUnits, edges);
   const nodesWithCoscineInputs = propagateCoscineInputs(nodesWithROCrate, edges);
   const nodesWithCoscineProfiles = propagateCoscineApplicationProfiles(
     nodesWithCoscineInputs,
     edges,
   );
-  return nodesWithCoscineProfiles;
+  const nodesWithProfileValidity = propagateProfileSearchValidity(
+    nodesWithCoscineProfiles,
+    edges,
+  );
+  return annotateMetadataFormProfileInputs(nodesWithProfileValidity, edges);
 }
 
 export default function App() {
-  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
-  const [edges, setEdges] = useEdgesState(initialEdges);
+  const [startupWorkflow] = useState(() => defaultStartupWorkflow);
+  const [nodes, setNodes, onNodesChange] = useNodesState(startupWorkflow.nodes);
+  const [edges, setEdges] = useEdgesState(startupWorkflow.edges);
   const [globalLanguage, setGlobalLanguage] = useState('en');
   const text = appText[globalLanguage] ?? appText.en;
   const [reactFlowInstance, setReactFlowInstance] = useState(null);
-  const [savedLayouts, setSavedLayouts] = useState(() => readSavedLayouts());
-  const [layoutName, setLayoutName] = useState('');
-  const [selectedSavedLayout, setSelectedSavedLayout] = useState('');
-  const [layoutStatus, setLayoutStatus] = useState('');
-  const nodeIdCountRef = useRef(initialNodes.length);
-  const nodeTypeCountsRef = useRef(buildNodeTypeCounts(initialNodes));
+  const [connectionNotice, setConnectionNotice] = useState(null);
+  const nodeIdCountRef = useRef(startupWorkflow.nodes.length);
+  const nodeTypeCountsRef = useRef(buildNodeTypeCounts(startupWorkflow.nodes));
   const nodesRef = useRef(nodes);
   const edgesRef = useRef(edges);
   const tabularMemoryRef = useRef(new Map());
+  const tabularBuffersRef = useRef(new Map());
+  const tabularRdfConversionsRef = useRef(new Map());
   const profileDefinitionRequestsRef = useRef(new Map());
 
   useEffect(() => {
@@ -796,6 +1087,101 @@ export default function App() {
   useEffect(() => {
     edgesRef.current = edges;
   }, [edges]);
+
+  useEffect(() => {
+    if (!connectionNotice) {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => setConnectionNotice(null), 7000);
+    return () => window.clearTimeout(timeoutId);
+  }, [connectionNotice]);
+
+  useEffect(
+    () => () => {
+      for (const controller of tabularRdfConversionsRef.current.values()) {
+        controller.abort();
+      }
+      tabularRdfConversionsRef.current.clear();
+    },
+    [],
+  );
+
+  const startTabularRdfConversion = useCallback(
+    (nodeId, sheets) => {
+      tabularRdfConversionsRef.current.get(nodeId)?.abort();
+      const controller = new AbortController();
+      const conversionId = `${Date.now()}-${Math.random()}`;
+      tabularRdfConversionsRef.current.set(nodeId, controller);
+
+      const updateConversionData = (conversionData, derive = false) => {
+        if (tabularRdfConversionsRef.current.get(nodeId) !== controller) {
+          return;
+        }
+
+        setNodes((currentNodes) => {
+          const updatedNodes = currentNodes.map((node) =>
+            node.id === nodeId &&
+            (!node.data.rdfConversionId || node.data.rdfConversionId === conversionId)
+              ? {
+                  ...node,
+                  data: {
+                    ...node.data,
+                    rdfConversionId: conversionId,
+                    ...conversionData,
+                  },
+                }
+              : node,
+          );
+          const nextNodes = derive
+            ? deriveNodeData(updatedNodes, edgesRef.current, tabularMemoryRef.current)
+            : updatedNodes;
+          nodesRef.current = nextNodes;
+          return nextNodes;
+        });
+      };
+
+      updateConversionData({
+        rdfConversionState: 'running',
+        rdfConversionProgress: 0,
+        rdfConversionError: '',
+      });
+
+      serializeTabularDataInWorker(sheets, {
+        signal: controller.signal,
+        onProgress: ({ percent }) => {
+          updateConversionData({ rdfConversionProgress: percent });
+        },
+      })
+        .then((serializedDataRdf) => {
+          updateConversionData(
+            {
+              serializedDataRdf,
+              rdfConversionState: 'complete',
+              rdfConversionProgress: 100,
+              rdfConversionError: '',
+            },
+            true,
+          );
+        })
+        .catch((error) => {
+          if (error?.name !== 'AbortError') {
+            updateConversionData({
+              serializedDataRdf: '',
+              rdfConversionState: 'error',
+              rdfConversionError:
+                error?.message || 'Could not convert the tabular data to RDF.',
+            });
+          }
+        })
+        .finally(() => {
+          if (tabularRdfConversionsRef.current.get(nodeId) === controller) {
+            tabularRdfConversionsRef.current.delete(nodeId);
+          }
+        });
+    },
+    [setNodes],
+  );
 
   const onColumnDescriptionFieldsChange = useCallback(
     (nodeId, fields) => {
@@ -828,9 +1214,14 @@ export default function App() {
   );
 
   const onTabularLoaded = useCallback(
-    (nodeId, fileName, buffer) => {
-      const preview = parseTabularWorkbook(buffer, 5);
+    (nodeId, fileName, buffer, hasHeader = true, transpose = false) => {
+      tabularRdfConversionsRef.current.get(nodeId)?.abort();
+      tabularRdfConversionsRef.current.delete(nodeId);
+      const preview = parseTabularWorkbook(buffer, 5, hasHeader, transpose);
+      const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
+      const shouldConvertToRdf = sourceNode?.data.convertDataToRdf === true;
       tabularMemoryRef.current.set(nodeId, preview);
+      tabularBuffersRef.current.set(nodeId, { fileName, buffer });
 
       setNodes((currentNodes) => {
         const nextNodes = deriveNodeData(
@@ -841,8 +1232,15 @@ export default function App() {
                   data: {
                     ...node.data,
                     fileName,
+                    hasHeader,
+                    transpose,
                     rowCount: preview.rowCount,
                     sheetName: preview.sheetName,
+                    serializedDataRdf: '',
+                    rdfConversionId: '',
+                    rdfConversionState: shouldConvertToRdf ? 'queued' : '',
+                    rdfConversionProgress: 0,
+                    rdfConversionError: '',
                   },
               }
               : node,
@@ -854,12 +1252,122 @@ export default function App() {
         nodesRef.current = nextNodes;
         return nextNodes;
       });
+
+      if (shouldConvertToRdf) {
+        startTabularRdfConversion(nodeId, preview.sheets);
+      }
     },
-    [setNodes],
+    [setNodes, startTabularRdfConversion],
+  );
+
+  const onTabularHasHeaderChange = useCallback(
+    (nodeId, hasHeader) => {
+      const loadedFile = tabularBuffersRef.current.get(nodeId);
+
+      if (loadedFile) {
+        const node = nodesRef.current.find((candidate) => candidate.id === nodeId);
+        onTabularLoaded(
+          nodeId,
+          loadedFile.fileName,
+          loadedFile.buffer,
+          hasHeader,
+          node?.data.transpose === true,
+        );
+        return;
+      }
+
+      setNodes((currentNodes) => {
+        const nextNodes = currentNodes.map((node) =>
+          node.id === nodeId
+            ? { ...node, data: { ...node.data, hasHeader } }
+            : node,
+        );
+        nodesRef.current = nextNodes;
+        return nextNodes;
+      });
+    },
+    [onTabularLoaded, setNodes],
+  );
+
+  const onTabularTransposeChange = useCallback(
+    (nodeId, transpose) => {
+      const loadedFile = tabularBuffersRef.current.get(nodeId);
+      const node = nodesRef.current.find((candidate) => candidate.id === nodeId);
+
+      if (loadedFile) {
+        onTabularLoaded(
+          nodeId,
+          loadedFile.fileName,
+          loadedFile.buffer,
+          node?.data.hasHeader !== false,
+          transpose,
+        );
+        return;
+      }
+
+      setNodes((currentNodes) => {
+        const nextNodes = currentNodes.map((candidate) =>
+          candidate.id === nodeId
+            ? { ...candidate, data: { ...candidate.data, transpose } }
+            : candidate,
+        );
+        nodesRef.current = nextNodes;
+        return nextNodes;
+      });
+    },
+    [onTabularLoaded, setNodes],
+  );
+
+  const onTabularRdfConversionChange = useCallback(
+    (nodeId, convertDataToRdf) => {
+      const preview = tabularMemoryRef.current.get(nodeId);
+      tabularRdfConversionsRef.current.get(nodeId)?.abort();
+      tabularRdfConversionsRef.current.delete(nodeId);
+
+      setNodes((currentNodes) => {
+        const updatedNodes = currentNodes.map((node) =>
+          node.id === nodeId
+            ? {
+                ...node,
+                data: {
+                  ...node.data,
+                  convertDataToRdf,
+                  serializedDataRdf: '',
+                  rdfConversionId: '',
+                  rdfConversionState: convertDataToRdf && preview ? 'queued' : '',
+                  rdfConversionProgress: 0,
+                  rdfConversionError: '',
+                },
+              }
+            : node,
+        );
+        const nextNodes = deriveNodeData(
+          updatedNodes,
+          edgesRef.current,
+          tabularMemoryRef.current,
+        );
+        nodesRef.current = nextNodes;
+        return nextNodes;
+      });
+
+      if (convertDataToRdf && preview) {
+        startTabularRdfConversion(nodeId, preview.sheets);
+      }
+    },
+    [setNodes, startTabularRdfConversion],
   );
 
   const onProfileSelect = useCallback(
     async (profileSearchNodeId, profile) => {
+      const profileSearchNode = nodesRef.current.find(
+        (node) => node.id === profileSearchNodeId,
+      );
+      if (profileSearchNode?.data.invalidated) {
+        throw new Error(
+          'This profile link is inactive because Coscine supplies the metadata form profile.',
+        );
+      }
+
       const metadataFormIds = getConnectedMetadataFormIds(
         nodesRef.current,
         edgesRef.current,
@@ -1032,6 +1540,9 @@ export default function App() {
 
   Object.assign(nodeHandlers, {
     onTabularLoaded,
+    onTabularHasHeaderChange,
+    onTabularTransposeChange,
+    onTabularRdfConversionChange,
     onColumnDescriptionFieldsChange,
     onMetadataRdfChange,
     onProfileSelect,
@@ -1040,27 +1551,127 @@ export default function App() {
   });
 
   const onConnect = useCallback(
+    (connection) => {
+      let workingNodes = nodesRef.current;
+      const nodeTypesById = new Map(
+        workingNodes.map((node) => [node.id, node.type]),
+      );
+      let nextEdges = addEdge(connection, edgesRef.current);
+
+      if (
+        nodeTypesById.get(connection.source) === 'roCrate' &&
+        nodeTypesById.get(connection.target) === 'coscine'
+      ) {
+        const connectedFormId = nextEdges.find(
+          (edge) =>
+            edge.target === connection.source &&
+            nodeTypesById.get(edge.source) === 'metadataForm',
+        )?.source;
+        let metadataFormId =
+          connectedFormId ||
+          workingNodes.find((node) => node.type === 'metadataForm')?.id;
+
+        if (!metadataFormId) {
+          nodeIdCountRef.current += 1;
+          nodeTypeCountsRef.current.metadataForm =
+            (nodeTypeCountsRef.current.metadataForm ?? 0) + 1;
+          metadataFormId = `node-${nodeIdCountRef.current}`;
+          const coscineNode = workingNodes.find(
+            (node) => node.id === connection.target,
+          );
+          workingNodes = [
+            ...workingNodes,
+            {
+              id: metadataFormId,
+              type: 'metadataForm',
+              position: {
+                x: (coscineNode?.position.x ?? 0) + 420,
+                y: coscineNode?.position.y ?? 0,
+              },
+              data: {
+                label: `Metadata Form ${nodeTypeCountsRef.current.metadataForm}`,
+                language: globalLanguage,
+              },
+            },
+          ];
+          nodeTypesById.set(metadataFormId, 'metadataForm');
+        }
+
+        const alreadyConnected = nextEdges.some(
+          (edge) =>
+            edge.source === connection.target && edge.target === metadataFormId,
+        );
+
+        if (metadataFormId && !alreadyConnected) {
+          nextEdges = addEdge(
+            {
+              id: `auto-${connection.target}-${metadataFormId}`,
+              source: connection.target,
+              target: metadataFormId,
+            },
+            nextEdges,
+          );
+        }
+
+        const metadataFeedsCoscine = nextEdges.some(
+          (edge) =>
+            edge.source === metadataFormId && edge.target === connection.target,
+        );
+        if (metadataFormId && !metadataFeedsCoscine) {
+          nextEdges = addEdge(
+            {
+              id: `auto-${metadataFormId}-${connection.target}`,
+              source: metadataFormId,
+              target: connection.target,
+            },
+            nextEdges,
+          );
+        }
+      }
+
+      nextEdges = styleWorkflowEdges(nextEdges, workingNodes);
+      const nextNodes = deriveNodeData(
+        workingNodes,
+        nextEdges,
+        tabularMemoryRef.current,
+      );
+
+      nodesRef.current = nextNodes;
+      edgesRef.current = nextEdges;
+      setNodes(nextNodes);
+      setEdges(nextEdges);
+    },
+    [globalLanguage, setEdges, setNodes],
+  );
+
+  const isValidConnection = useCallback(
     (connection) =>
-      setEdges((currentEdges) => {
-        const styledConnection = applySemanticEdgeStyle(connection, nodesRef.current);
-        const nextEdges = addEdge(styledConnection, currentEdges);
-        edgesRef.current = nextEdges;
-
-        setNodes((currentNodes) => {
-          const nextNodes = deriveNodeData(currentNodes, nextEdges, tabularMemoryRef.current);
-          nodesRef.current = nextNodes;
-          return nextNodes;
-        });
-
-        return nextEdges;
-      }),
-    [setEdges, setNodes],
+      isSupportedConnection(connection, nodesRef.current, edgesRef.current),
+    [],
   );
 
   const onEdgesChange = useCallback(
     (changes) => {
+      const { allowedChanges, rejectedRemoval } =
+        protectCoscineMetadataConnections(
+          changes,
+          edgesRef.current,
+          nodesRef.current,
+        );
+
+      if (rejectedRemoval) {
+        setConnectionNotice({
+          id: Date.now(),
+          message:
+            'Coscine needs its Metadata Form connection while it is connected to an RO-Crate. Disconnect Coscine from the RO-Crate first.',
+        });
+      }
+
       setEdges((currentEdges) => {
-        const nextEdges = applyEdgeChanges(changes, currentEdges);
+        const nextEdges = styleWorkflowEdges(
+          applyEdgeChanges(allowedChanges, currentEdges),
+          nodesRef.current,
+        );
         edgesRef.current = nextEdges;
 
         setNodes((currentNodes) => {
@@ -1077,7 +1688,10 @@ export default function App() {
 
   const onNodesDelete = useCallback((deletedNodes) => {
     for (const node of deletedNodes) {
+      tabularRdfConversionsRef.current.get(node.id)?.abort();
+      tabularRdfConversionsRef.current.delete(node.id);
       tabularMemoryRef.current.delete(node.id);
+      tabularBuffersRef.current.delete(node.id);
 
       if (node.type === 'profileSearch') {
         profileDefinitionRequestsRef.current.get(node.id)?.abort();
@@ -1115,14 +1729,69 @@ export default function App() {
       event.preventDefault();
 
       const template = JSON.parse(rawTemplate);
-      nodeIdCountRef.current += 1;
-      const nextTypeCount = (nodeTypeCountsRef.current[template.type] ?? 0) + 1;
-      nodeTypeCountsRef.current[template.type] = nextTypeCount;
-
       const position = reactFlowInstance.screenToFlowPosition({
         x: event.clientX,
         y: event.clientY,
       });
+
+      if (template.type === 'quantityKindAndUnit') {
+        const quantityKindCount = (nodeTypeCountsRef.current.quantityKind ?? 0) + 1;
+        const unitCount = (nodeTypeCountsRef.current.unit ?? 0) + 1;
+        nodeTypeCountsRef.current.quantityKind = quantityKindCount;
+        nodeTypeCountsRef.current.unit = unitCount;
+
+        nodeIdCountRef.current += 1;
+        const quantityKindId = `node-${nodeIdCountRef.current}`;
+        nodeIdCountRef.current += 1;
+        const unitId = `node-${nodeIdCountRef.current}`;
+        const addedNodes = [
+          {
+            id: quantityKindId,
+            type: 'quantityKind',
+            position,
+            data: {
+              label: `Quantity Kinds ${quantityKindCount}`,
+              language: globalLanguage,
+            },
+          },
+          {
+            id: unitId,
+            type: 'unit',
+            position: { x: position.x + 440, y: position.y },
+            data: {
+              label: `Units ${unitCount}`,
+              language: globalLanguage,
+            },
+          },
+        ];
+        const workingNodes = [...nodesRef.current, ...addedNodes];
+        const nextEdges = styleWorkflowEdges(
+          [
+            ...edgesRef.current,
+            {
+              id: `auto-${quantityKindId}-${unitId}`,
+              source: quantityKindId,
+              target: unitId,
+            },
+          ],
+          workingNodes,
+        );
+        const nextNodes = deriveNodeData(
+          workingNodes,
+          nextEdges,
+          tabularMemoryRef.current,
+        );
+
+        nodesRef.current = nextNodes;
+        edgesRef.current = nextEdges;
+        setNodes(nextNodes);
+        setEdges(nextEdges);
+        return;
+      }
+
+      nodeIdCountRef.current += 1;
+      const nextTypeCount = (nodeTypeCountsRef.current[template.type] ?? 0) + 1;
+      nodeTypeCountsRef.current[template.type] = nextTypeCount;
 
       const newNode = {
         id: `node-${nodeIdCountRef.current}`,
@@ -1140,115 +1809,43 @@ export default function App() {
         return nextNodes;
       });
     },
-    [globalLanguage, reactFlowInstance, setNodes],
+    [globalLanguage, reactFlowInstance, setEdges, setNodes],
   );
 
-  const saveCurrentLayout = useCallback(() => {
-    const trimmedName = layoutName.trim();
+  const applyWorkflowTemplate = useCallback(
+    (templateType) => {
+      for (const controller of tabularRdfConversionsRef.current.values()) {
+        controller.abort();
+      }
+      for (const controller of profileDefinitionRequestsRef.current.values()) {
+        controller.abort();
+      }
 
-    if (!trimmedName) {
-      setLayoutStatus(text.layoutNameRequired);
-      return;
-    }
+      tabularRdfConversionsRef.current.clear();
+      profileDefinitionRequestsRef.current.clear();
+      tabularMemoryRef.current.clear();
+      tabularBuffersRef.current.clear();
 
-    const flowSnapshot = reactFlowInstance?.toObject?.();
-    const nextLayout = {
-      name: trimmedName,
-      savedAt: new Date().toISOString(),
-      nodes: nodesRef.current.map(cleanNodeForStorage),
-      edges: edgesRef.current.map(cleanEdgeForStorage),
-      viewport: flowSnapshot?.viewport ?? null,
-    };
-    const otherLayouts = savedLayouts.filter((layout) => layout.name !== trimmedName);
-    const nextLayouts = [...otherLayouts, nextLayout].sort((a, b) =>
-      a.name.localeCompare(b.name),
-    );
+      const template = createWorkflowTemplate(templateType, globalLanguage);
+      const nextNodes = deriveNodeData(template.nodes, template.edges, tabularMemoryRef.current);
 
-    try {
-      writeSavedLayouts(nextLayouts);
-      setSavedLayouts(nextLayouts);
-      setSelectedSavedLayout(trimmedName);
-      setLayoutStatus(text.layoutSaved);
-    } catch {
-      setLayoutStatus(text.layoutLoadFailed);
-    }
-  }, [layoutName, reactFlowInstance, savedLayouts, text.layoutLoadFailed, text.layoutNameRequired, text.layoutSaved]);
+      nodeIdCountRef.current = nextNodes.length;
+      nodeTypeCountsRef.current = buildNodeTypeCounts(nextNodes);
+      nodesRef.current = nextNodes;
+      edgesRef.current = template.edges;
+      setNodes(nextNodes);
+      setEdges(template.edges);
+      setConnectionNotice(null);
 
-  const loadSelectedLayout = useCallback(() => {
-    if (!selectedSavedLayout) {
-      setLayoutStatus(text.layoutSelectionRequired);
-      return;
-    }
-
-    const savedLayout = savedLayouts.find((layout) => layout.name === selectedSavedLayout);
-
-    if (!savedLayout || !Array.isArray(savedLayout.nodes) || !Array.isArray(savedLayout.edges)) {
-      setLayoutStatus(text.layoutLoadFailed);
-      return;
-    }
-
-    const restoredNodes = savedLayout.nodes.map(cleanNodeForStorage);
-    const restoredEdges = restoreSavedEdges(savedLayout.edges, restoredNodes);
-    const nextNodes = deriveNodeData(
-      restoredNodes,
-      restoredEdges,
-      tabularMemoryRef.current,
-    );
-
-    nodeIdCountRef.current = getNextNodeIdCount(nextNodes);
-    nodeTypeCountsRef.current = buildNodeTypeCounts(nextNodes);
-    nodesRef.current = nextNodes;
-    edgesRef.current = restoredEdges;
-    setNodes(nextNodes);
-    setEdges(restoredEdges);
-    setLayoutName(savedLayout.name);
-    setLayoutStatus(text.layoutLoaded);
-
-    if (savedLayout.viewport && reactFlowInstance?.setViewport) {
       window.requestAnimationFrame(() => {
-        reactFlowInstance.setViewport(savedLayout.viewport);
+        reactFlowInstance?.fitView?.({ padding: 0.18, maxZoom: 0.85, duration: 350 });
       });
-    }
-  }, [
-    reactFlowInstance,
-    savedLayouts,
-    selectedSavedLayout,
-    setEdges,
-    setNodes,
-    text.layoutLoadFailed,
-    text.layoutLoaded,
-    text.layoutSelectionRequired,
-  ]);
-
-  const deleteSelectedLayout = useCallback(() => {
-    if (!selectedSavedLayout) {
-      setLayoutStatus(text.layoutSelectionRequired);
-      return;
-    }
-
-    const nextLayouts = savedLayouts.filter(
-      (layout) => layout.name !== selectedSavedLayout,
-    );
-
-    try {
-      writeSavedLayouts(nextLayouts);
-      setSavedLayouts(nextLayouts);
-      setSelectedSavedLayout('');
-      setLayoutStatus(text.layoutDeleted);
-    } catch {
-      setLayoutStatus(text.layoutLoadFailed);
-    }
-  }, [
-    savedLayouts,
-    selectedSavedLayout,
-    text.layoutDeleted,
-    text.layoutLoadFailed,
-    text.layoutSelectionRequired,
-  ]);
+    },
+    [globalLanguage, reactFlowInstance, setEdges, setNodes],
+  );
 
   return (
     <div className="app-shell">
-      <img className="app-logo" src={rwthCaadLogo} alt="RWTH CAAD" />
       <div className="global-language-selector" aria-label="Global language selection">
         {globalLanguageOptions.map((option) => (
           <button
@@ -1271,83 +1868,76 @@ export default function App() {
           </button>
         ))}
       </div>
-      <aside className="sidebar">
-        <p className="eyebrow">{text.sidebarHeading}</p>
-        <p className="intro">{text.sidebarIntro}</p>
-        <div className="node-palette">
-          {nodeTemplates.map((template) => (
-            <button
-              key={template.label}
-              type="button"
-              draggable
-              className={`drag-button${template.icon ? ' drag-button--with-icon' : ''}`}
-              onDragStart={(event) => onDragStart(event, template)}
-            >
-              <span className="drag-button__content">
-                {template.icon ? (
-                  <img src={template.icon} alt="" className="drag-button__icon" />
-                ) : null}
-                <span>{template.label}</span>
-              </span>
-            </button>
-          ))}
-        </div>
-        <section className="saved-layouts" aria-labelledby="saved-layouts-heading">
-          <h2 id="saved-layouts-heading">{text.savedLayoutsHeading}</h2>
-          <label className="saved-layouts__label" htmlFor="layout-name">
-            {text.layoutNameLabel}
-          </label>
-          <div className="saved-layouts__row">
-            <input
-              id="layout-name"
-              className="saved-layouts__input"
-              type="text"
-              value={layoutName}
-              placeholder={text.layoutNamePlaceholder}
-              onChange={(event) => setLayoutName(event.target.value)}
-            />
-            <button
-              type="button"
-              className="saved-layouts__button saved-layouts__button--primary"
-              onClick={saveCurrentLayout}
-            >
-              {text.saveLayout}
-            </button>
-          </div>
-          <select
-            className="saved-layouts__select"
-            value={selectedSavedLayout}
-            onChange={(event) => setSelectedSavedLayout(event.target.value)}
+      {connectionNotice ? (
+        <div className="connection-notice" role="status" aria-live="polite">
+          <span className="connection-notice__icon" aria-hidden="true">!</span>
+          <p>{connectionNotice.message}</p>
+          <button
+            type="button"
+            className="connection-notice__dismiss"
+            onClick={() => setConnectionNotice(null)}
+            aria-label="Dismiss connection notice"
           >
-            <option value="" disabled={savedLayouts.length > 0}>
-              {savedLayouts.length > 0 ? text.selectSavedLayout : text.noSavedLayouts}
-            </option>
-            {savedLayouts.map((layout) => (
-              <option key={layout.name} value={layout.name}>
-                {layout.name}
-              </option>
-            ))}
-          </select>
-          <div className="saved-layouts__actions">
-            <button
-              type="button"
-              className="saved-layouts__button"
-              onClick={loadSelectedLayout}
-              disabled={savedLayouts.length === 0}
-            >
-              {text.loadLayout}
-            </button>
-            <button
-              type="button"
-              className="saved-layouts__button"
-              onClick={deleteSelectedLayout}
-              disabled={savedLayouts.length === 0}
-            >
-              {text.deleteLayout}
-            </button>
-          </div>
-          {layoutStatus ? <p className="saved-layouts__status">{layoutStatus}</p> : null}
+            ×
+          </button>
+        </div>
+      ) : null}
+      <aside className="sidebar">
+        <div className="sidebar-header">
+          <img className="app-logo" src={rwthCaadLogo} alt="RWTH CAAD" />
+          <p className="eyebrow">{text.sidebarHeading}</p>
+        </div>
+        <section className="workflow-templates" aria-labelledby="workflow-templates-heading">
+          <h2 id="workflow-templates-heading">{text.templatesHeading}</h2>
+          <p className="workflow-templates__intro">{text.templatesIntro}</p>
+          <button
+            type="button"
+            className="workflow-template-card"
+            title={text.coscineTemplateDescription}
+            onClick={() => applyWorkflowTemplate('coscine')}
+          >
+            <span className="workflow-template-card__logos" aria-hidden="true">
+              <img src={roCrateLogo} alt="" />
+              <span>→</span>
+              <img src={coscineLogo} alt="" />
+            </span>
+            <span className="workflow-template-card__title">{text.coscineTemplate}</span>
+          </button>
+          <button
+            type="button"
+            className="workflow-template-card"
+            title={text.roCrateTemplateDescription}
+            onClick={() => applyWorkflowTemplate('ro-crate')}
+          >
+            <span className="workflow-template-card__logos" aria-hidden="true">
+              <img src={aimsIcon} alt="" />
+              <span>→</span>
+              <img src={roCrateLogo} alt="" />
+            </span>
+            <span className="workflow-template-card__title">{text.roCrateTemplate}</span>
+          </button>
         </section>
+        <p className="intro">{text.sidebarIntro}</p>
+        <div className="sidebar-node-scroll">
+          <div className="node-palette">
+            {nodeTemplates.map((template) => (
+              <button
+                key={template.label}
+                type="button"
+                draggable
+                className={`drag-button${template.icon ? ' drag-button--with-icon' : ''}`}
+                onDragStart={(event) => onDragStart(event, template)}
+              >
+                <span className="drag-button__content">
+                  {template.icon ? (
+                    <img src={template.icon} alt="" className="drag-button__icon" />
+                  ) : null}
+                  <span>{template.label}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="sidebar-footer">
           <img className="sidebar-footer__logo" src={nfdi4ingLogo} alt="NFDI4Ing" />
         </div>
@@ -1362,6 +1952,7 @@ export default function App() {
           onEdgesChange={onEdgesChange}
           onNodesDelete={onNodesDelete}
           onConnect={onConnect}
+          isValidConnection={isValidConnection}
           onInit={setReactFlowInstance}
           deleteKeyCode={['Backspace', 'Delete']}
           fitViewOptions={{ padding: 0.25, maxZoom: 0.9 }}
