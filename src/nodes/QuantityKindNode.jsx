@@ -139,7 +139,7 @@ export default function QuantityKindNode({ id, data, selected, onQuantityKindSel
       </div>
 
       <NodeInfoButton nodeType="quantityKind" language={data.language} />
-      <NodeHandle type="source" />
+      <NodeHandle type="source" connectsTo={['Units']} />
     </div>
   );
 }

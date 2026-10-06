@@ -7,7 +7,15 @@ import tabularFileIcon from '../assets/tabular-file-icon.png';
 import NodeHandle from './NodeHandle';
 import NodeInfoButton from './NodeInfoButton';
 
-export default function TabularFileNode({ id, data, selected, onTabularLoaded }) {
+export default function TabularFileNode({
+  id,
+  data,
+  selected,
+  onTabularLoaded,
+  onHasHeaderChange,
+  onTransposeChange,
+  onRdfConversionChange,
+}) {
   const fileInputRef = useRef(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
@@ -29,7 +37,13 @@ export default function TabularFileNode({ id, data, selected, onTabularLoaded })
 
       try {
         const content = await file.arrayBuffer();
-        onTabularLoaded(id, file.name, content);
+        onTabularLoaded(
+          id,
+          file.name,
+          content,
+          data.hasHeader !== false,
+          data.transpose === true,
+        );
       } catch (readError) {
         console.error(readError);
         setError('Could not read this tabular file');
@@ -38,7 +52,7 @@ export default function TabularFileNode({ id, data, selected, onTabularLoaded })
         event.target.value = '';
       }
     },
-    [id, onTabularLoaded],
+    [data.hasHeader, data.transpose, id, onTabularLoaded],
   );
 
   return (
@@ -51,6 +65,22 @@ export default function TabularFileNode({ id, data, selected, onTabularLoaded })
       <button type="button" className="tabular-file-node__button" onClick={openFilePicker}>
         {isLoading ? 'Reading...' : 'Select tabular file'}
       </button>
+      <label className="tabular-file-node__header-option nodrag">
+        <input
+          type="checkbox"
+          checked={data.hasHeader !== false}
+          onChange={(event) => onHasHeaderChange(id, event.target.checked)}
+        />
+        First row contains headers
+      </label>
+      <label className="tabular-file-node__header-option nodrag">
+        <input
+          type="checkbox"
+          checked={data.transpose === true}
+          onChange={(event) => onTransposeChange(id, event.target.checked)}
+        />
+        Rotate rows into columns (stop at empty row or column-count change)
+      </label>
       <input
         ref={fileInputRef}
         type="file"
@@ -66,9 +96,27 @@ export default function TabularFileNode({ id, data, selected, onTabularLoaded })
       ) : (
         <p className="tabular-file-node__meta">No tabular file loaded</p>
       )}
+      {data.rdfConversionState === 'queued' || data.rdfConversionState === 'running' ? (
+        <div className="tabular-file-node__conversion" role="status" aria-live="polite">
+          <div className="tabular-file-node__conversion-label">
+            <span>Converting data to RDF in background</span>
+            <span>{data.rdfConversionProgress || 0}%</span>
+          </div>
+          <progress max="100" value={data.rdfConversionProgress || 0} />
+        </div>
+      ) : null}
+      {data.rdfConversionState === 'complete' ? (
+        <p className="tabular-file-node__conversion-status">RDF conversion complete.</p>
+      ) : null}
+      {data.rdfConversionError ? (
+        <p className="tabular-file-node__conversion-error">{data.rdfConversionError}</p>
+      ) : null}
       {error ? <p className="tabular-file-node__meta">{error}</p> : null}
       <NodeInfoButton nodeType="tabularFile" language={data.language} />
-      <NodeHandle type="source" />
+      <NodeHandle
+        type="source"
+        connectsTo={['Preview Tabular Data', 'Column Descriptions', 'RO-Crate']}
+      />
     </div>
   );
 }
