@@ -4,6 +4,7 @@
  * assigned from UnitNode, and every change is sent upward for RDF serialization.
  * When a Terminology Service or Units node is connected, the description and
  * unit fields also offer type-to-search autocomplete next to drag-and-drop.
+
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import tabularSchemaIcon from '../assets/tabular_schema.png';
@@ -19,7 +20,6 @@ import NodeInfoButton from './NodeInfoButton';
 
 const UNIT_DRAG_MIME_TYPE = 'application/tabulatrdm-unit';
 const TERM_DRAG_MIME_TYPE = 'application/tabulatrdm-term';
-
 const SUGGESTION_DEBOUNCE_MS = 300;
 const MIN_SUGGESTION_QUERY_LENGTH = 2;
 const MAX_SUGGESTIONS = 8;
@@ -320,6 +320,7 @@ export default function ColumnDescriptionNode({ id, data, selected, onFieldsChan
     },
     [hasTerminologyInput, unitInput],
   );
+
 
   const handleDropTargetDragOver = useCallback((event) => {
     event.preventDefault();

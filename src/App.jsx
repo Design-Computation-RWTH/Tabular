@@ -613,6 +613,54 @@ function countDescribedColumns(nodes) {
 
   return { total, described };
 }
+  }
+
+  return { total, described };
+}
+
+function getEffectiveColumnCount(row) {
+  for (let index = row.length - 1; index >= 0; index -= 1) {
+    if (normalizeCellValue(row[index]).trim().length > 0) {
+      return index + 1;
+    }
+  }
+
+  return 0;
+}
+
+function readWorksheetRows(worksheet, transpose = false) {
+  const rows = XLSX.utils.sheet_to_json(worksheet, {
+    header: 1,
+    blankrows: transpose,
+    defval: '',
+    raw: false,
+  });
+  let usableRows;
+
+  if (transpose) {
+    const initialColumnCount = getEffectiveColumnCount(rows[0] ?? []);
+    const stopIndex = rows.findIndex(
+      (row) =>
+        isEmptyRow(row) || getEffectiveColumnCount(row) !== initialColumnCount,
+    );
+    usableRows = rows.slice(0, stopIndex < 0 ? rows.length : stopIndex);
+  } else {
+    usableRows = rows.filter((row) => Array.isArray(row) && !isEmptyRow(row));
+  }
+
+  if (!transpose || usableRows.length === 0) {
+    return usableRows;
+  }
+
+  const columnCount = usableRows.reduce(
+    (maxColumns, row) => Math.max(maxColumns, row.length),
+    0,
+  );
+
+  return Array.from({ length: columnCount }, (_, columnIndex) =>
+    usableRows.map((row) => normalizeCellValue(row[columnIndex])),
+  );
+}
 
 /**
  * Derives the workflow-level checklist from the current graph state. Each step
@@ -653,75 +701,59 @@ function buildWorkflowChecklist(nodes, checklistText, checkedStepKeys = new Set(
     columnsDone = described === total;
   }
 
-  steps.push({
-    key: 'columns',
-    label: checklistText.columns,
-    detail: columnsDetail,
-    autoDone: columnsDone,
-    focusNodeId: columnNodes[0]?.id ?? null,
-  });
-
-  const metadataFormNodes = nodes.filter((node) => node.type === 'metadataForm');
-  const savedMetadataForm =
-    metadataFormNodes.find((node) => (node.data.serializedRdf ?? '').trim() !== '') ?? null;
-  steps.push({
-    key: 'metadata',
-    label: checklistText.metadata,
-    detail: savedMetadataForm ? checklistText.metadataDone : checklistText.metadataPending,
-    autoDone: Boolean(savedMetadataForm),
-    focusNodeId: metadataFormNodes[0]?.id ?? null,
-  });
-
-  const crateNodes = nodes.filter((node) => node.type === 'roCrate');
-  const readyCrateNode =
-    crateNodes.find((node) => (node.data.jsonLdContent?.jsonLd ?? '').trim() !== '') ?? null;
-  steps.push({
-    key: 'crate',
-    label: checklistText.crate,
-    detail: readyCrateNode ? checklistText.crateDone : checklistText.cratePending,
-    autoDone: Boolean(readyCrateNode),
-    focusNodeId: crateNodes[0]?.id ?? null,
-  });
-
-  for (const coscineNode of nodes.filter((node) => node.type === 'coscine')) {
-    const uploadState = coscineNode.data.coscineUploadState ?? {};
-    const crateReady = Boolean(
-      (coscineNode.data.roCrateInput?.jsonLdContent?.jsonLd ?? '').trim(),
+  const worksheet = workbook.Sheets[sheetName];
+  const tableRows = readWorksheetRows(worksheet, transpose);
+  const sheets = workbook.SheetNames.map((name) => {
+    const sheetRows = readWorksheetRows(workbook.Sheets[name], transpose);
+    const sheetColumnCount = sheetRows.reduce(
+      (maxColumns, row) => Math.max(maxColumns, row.length),
+      0,
     );
-    const metadataReady = Boolean(
-      (coscineNode.data.roCrateInput?.metadataContent ?? '').trim(),
-    );
+    const sheetHeaders = hasHeader
+      ? Array.from({ length: sheetColumnCount }, (_, index) =>
+          normalizeCellValue(sheetRows[0]?.[index]),
+        )
+      : Array.from(
+          { length: sheetColumnCount },
+          (_, index) => `Column ${index + 1}`,
+        );
+    const firstSheetDataRow = hasHeader ? 1 : 0;
 
-    let detail;
-    if (uploadState.uploadState === 'uploaded') {
-      detail = checklistText.coscineDone;
-    } else if (!crateReady || !metadataReady) {
-      detail = checklistText.coscinePendingConnect;
-    } else if (!uploadState.hasToken || !uploadState.hasSelectedResource) {
-      detail = checklistText.coscinePendingToken;
-    } else {
-      detail = checklistText.coscineReady;
-    }
+    return {
+      name,
+      rows: sheetRows.slice(firstSheetDataRow).map((row) =>
+        Object.fromEntries(
+          sheetHeaders.map((header, index) => [header, normalizeCellValue(row[index])]),
+        ),
+      ),
+    };
+  });
 
-    steps.push({
-      key: `coscine-${coscineNode.id}`,
-      label: checklistText.coscine,
-      detail,
-      autoDone: uploadState.uploadState === 'uploaded',
-      focusNodeId: coscineNode.id,
-    });
+  if (tableRows.length === 0) {
+    return { headers: [], rows: [], rowCount: 0, sheetName, sheets };
   }
 
-  const withManualChecks = steps.map((step) => ({
-    ...step,
-    done: step.autoDone || checkedStepKeys.has(step.key),
-  }));
-  const firstOpenIndex = withManualChecks.findIndex((step) => !step.done);
+  const columnCount = tableRows.reduce(
+    (maxColumns, row) => Math.max(maxColumns, row.length),
+    0,
+  );
+  const headers = hasHeader
+    ? Array.from({ length: columnCount }, (_, index) =>
+        normalizeCellValue(tableRows[0][index]),
+      )
+    : Array.from({ length: columnCount }, (_, index) => `Column ${index + 1}`);
+  const firstDataRow = hasHeader ? 1 : 0;
+  const rows = tableRows.slice(firstDataRow, firstDataRow + previewRowCount).map((row) =>
+    Array.from({ length: columnCount }, (_, index) => normalizeCellValue(row[index])),
+  );
 
-  return withManualChecks.map((step, index) => ({
-    ...step,
-    status: step.done ? 'done' : index === firstOpenIndex ? 'current' : 'pending',
-  }));
+  return {
+    headers,
+    rows,
+    rowCount: Math.max(tableRows.length - firstDataRow, 0),
+    sheetName,
+    sheets,
+  };
 }
 
 /**
@@ -1095,6 +1127,35 @@ function propagateCoscineApplicationProfiles(nodes, edges) {
   });
 }
 
+function propagateProfileSearchValidity(nodes, edges) {
+  const nodeTypesById = new Map(nodes.map((node) => [node.id, node.type]));
+  const coscineFormIds = new Set(
+    edges
+      .filter(
+        (edge) =>
+          nodeTypesById.get(edge.source) === 'coscine' &&
+          nodeTypesById.get(edge.target) === 'metadataForm',
+      )
+      .map((edge) => edge.target),
+  );
+
+  return nodes.map((node) => {
+    if (node.type !== 'profileSearch') return node;
+
+    const invalidated = edges.some(
+      (edge) => edge.source === node.id && coscineFormIds.has(edge.target),
+    );
+
+    return {
+      ...node,
+      data: {
+        ...node.data,
+        invalidated,
+      },
+    };
+  });
+}
+
 /**
  * Marks Column Description nodes that are connected to a Terminology Service
  * or Units node. The node uses these flags to enable per-column autocomplete
@@ -1220,6 +1281,7 @@ function FitWorkflowView({ request }) {
   }, [fitView, getNodes, nodesInitialized, request, viewportInitialized]);
 
   return null;
+}
 }
 
 export default function App() {
@@ -1422,7 +1484,7 @@ export default function App() {
   );
 
   const onTabularLoaded = useCallback(
-    (nodeId, fileName, buffer, hasHeader, transpose, manualTranspose = false, manualHeader = false) => {
+    (nodeId, fileName, buffer, hasHeader = true, transpose = false, manualTranspose = false, manualHeader = false) => {
       tabularRdfConversionsRef.current.get(nodeId)?.abort();
       tabularRdfConversionsRef.current.delete(nodeId);
       const preview = parseTabularWorkbook(buffer, 5, hasHeader, transpose);
@@ -1484,6 +1546,7 @@ export default function App() {
           loadedFile.buffer,
           hasHeader,
           node?.data.transpose === true,
+          node?.data.hasHeaderManuallySet ? node?.data.hasHeader === true : undefined,
           node?.data.transposeManuallySet === true,
           true,
         );
@@ -1524,6 +1587,7 @@ export default function App() {
         const nextNodes = currentNodes.map((candidate) =>
           candidate.id === nodeId
             ? { ...candidate, data: { ...candidate.data, transpose, transposeManuallySet: true } }
+            : candidate,
             : candidate,
         );
         nodesRef.current = nextNodes;
@@ -2256,13 +2320,6 @@ export default function App() {
       if (shouldConvertToRdf && previousTabularPreview) {
         startTabularRdfConversion('template-tabular', previousTabularPreview.sheets);
       }
-    },
-    [
-      globalLanguage,
-      setEdges,
-      setNodes,
-      startTabularRdfConversion,
-    ],
   );
 
   return (

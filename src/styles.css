@@ -85,137 +85,12 @@ body {
   border-radius: 50%;
 }
 
-.workflow-checklist {
-  position: absolute;
-  top: 12px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 4;
-  display: flex;
-  align-items: center;
-  flex-wrap: nowrap;
-  gap: 10px;
-  width: max-content;
-  padding: 6px 10px;
-  border: 1px solid rgba(148, 163, 184, 0.55);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.12);
-  backdrop-filter: blur(12px);
-}
-
-.workflow-checklist--hidden {
-  visibility: hidden;
-}
-
-.workflow-checklist__heading {
-  font-size: 0.68rem;
-  font-weight: 600;
-  color: #475569;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  white-space: nowrap;
-}
-
-.workflow-checklist__steps {
-  display: flex;
-  flex-wrap: nowrap;
-  align-items: center;
-  gap: 6px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.workflow-checklist__step {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 4px 9px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  font: inherit;
-  font-size: 0.75rem;
-  color: #475569;
-  cursor: pointer;
-  text-align: left;
-  flex-shrink: 0;
-}
-
-.workflow-checklist__step:hover:not(:disabled) {
-  background: rgba(148, 163, 184, 0.18);
-}
-
-.workflow-checklist__step:disabled {
-  cursor: default;
-  opacity: 0.75;
-}
-
-.workflow-checklist__step-index {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 17px;
-  height: 17px;
-  border-radius: 999px;
-  background: rgba(148, 163, 184, 0.35);
-  font-size: 0.68rem;
-  font-weight: 600;
-  flex-shrink: 0;
-}
-
-.workflow-checklist__step-text {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.workflow-checklist__step-label {
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.workflow-checklist__step-detail {
-  display: block;
-  font-size: 0.66rem;
-  color: #64748b;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.workflow-checklist__step--done {
-  color: #166534;
-}
-
-.workflow-checklist__step--done .workflow-checklist__step-index {
-  background: #dcfce7;
-  color: #166534;
-}
-
-.workflow-checklist__step--done .workflow-checklist__step-detail {
-  color: #15803d;
-}
-
-.workflow-checklist__step--current {
-  border-color: rgba(37, 99, 235, 0.5);
-  background: rgba(37, 99, 235, 0.08);
-  color: #1d4ed8;
-}
-
-.workflow-checklist__step--current .workflow-checklist__step-index {
-  background: #2563eb;
-  color: #ffffff;
-}
-
-.workflow-checklist__step--current .workflow-checklist__step-detail {
-  color: #1e40af;
-}
-
 .connection-notice {
   position: absolute;
   top: 78px;
+  right: 16px;
+  z-index: 12;
+  display: grid;
   right: 16px;
   z-index: 12;
   display: grid;
@@ -854,7 +729,6 @@ body {
 .tabular-file-node__advanced summary {
   cursor: pointer;
 }
-
 .tabular-file-node__meta {
   margin: 8px 0 0;
   font-size: 0.75rem;

@@ -77,6 +77,7 @@ saved browser copy** in either node to remove its stored data.
 
 ### 5. Download the package
 
+
 The **RO-Crate** node combines the data and descriptions. When it reports
 loaded RDF triples, choose **Download RO-Crate**.
 

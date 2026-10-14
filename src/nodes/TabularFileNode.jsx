@@ -8,7 +8,6 @@ import NodeHandle from './NodeHandle';
 import NodeInfoButton from './NodeInfoButton';
 
 const supportedFileName = /\.(csv|tsv|txt|xls|xlsx|xlsm|xlsb|ods|html|htm)$/i;
-
 export default function TabularFileNode({
   id,
   data,
