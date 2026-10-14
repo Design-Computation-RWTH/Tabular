@@ -12,7 +12,7 @@ place.
 ### Windows
 
 Download `TabularRDM-1.1.0-x64-Portable.exe` from the official
-[Tabular releases page](https://github.com/jyrkioraskari/TabularRDM/releases)
+[Tabular releases page](https://github.com/jyrkioraskari/Tabular/releases)
 and open it. The portable application normally needs neither installation nor
 administrator rights.
 
