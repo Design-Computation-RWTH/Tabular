@@ -613,6 +613,54 @@ function countDescribedColumns(nodes) {
 
   return { total, described };
 }
+  }
+
+  return { total, described };
+}
+
+function getEffectiveColumnCount(row) {
+  for (let index = row.length - 1; index >= 0; index -= 1) {
+    if (normalizeCellValue(row[index]).trim().length > 0) {
+      return index + 1;
+    }
+  }
+
+  return 0;
+}
+
+function readWorksheetRows(worksheet, transpose = false) {
+  const rows = XLSX.utils.sheet_to_json(worksheet, {
+    header: 1,
+    blankrows: transpose,
+    defval: '',
+    raw: false,
+  });
+  let usableRows;
+
+  if (transpose) {
+    const initialColumnCount = getEffectiveColumnCount(rows[0] ?? []);
+    const stopIndex = rows.findIndex(
+      (row) =>
+        isEmptyRow(row) || getEffectiveColumnCount(row) !== initialColumnCount,
+    );
+    usableRows = rows.slice(0, stopIndex < 0 ? rows.length : stopIndex);
+  } else {
+    usableRows = rows.filter((row) => Array.isArray(row) && !isEmptyRow(row));
+  }
+
+  if (!transpose || usableRows.length === 0) {
+    return usableRows;
+  }
+
+  const columnCount = usableRows.reduce(
+    (maxColumns, row) => Math.max(maxColumns, row.length),
+    0,
+  );
+
+  return Array.from({ length: columnCount }, (_, columnIndex) =>
+    usableRows.map((row) => normalizeCellValue(row[columnIndex])),
+  );
+}
 
 /**
  * Derives the workflow-level checklist from the current graph state. Each step
@@ -623,7 +671,6 @@ function countDescribedColumns(nodes) {
  */
 function buildWorkflowChecklist(nodes, checklistText, checkedStepKeys = new Set()) {
   const steps = [];
-
   const tabularNodes = nodes.filter((node) => node.type === 'tabularFile');
   const loadedTabularNode = tabularNodes.find((node) => node.data.fileName) ?? null;
   steps.push({
@@ -634,7 +681,6 @@ function buildWorkflowChecklist(nodes, checklistText, checkedStepKeys = new Set(
     focusNodeId:
       (tabularNodes.find((node) => !node.data.fileName) ?? tabularNodes[0])?.id ?? null,
   });
-
   const columnNodes = nodes.filter(
     (node) => node.type === 'columnDescription' || node.type === 'headerSchema',
   );
@@ -652,6 +698,16 @@ function buildWorkflowChecklist(nodes, checklistText, checkedStepKeys = new Set(
       .replace('{total}', String(total));
     columnsDone = described === total;
   }
+
+  const columnNodes = nodes.filter(
+    (node) => node.type === 'columnDescription' || node.type === 'headerSchema',
+  );
+  const described = columnNodes.filter((node) => {
+    const value = node.data?.description ?? '';
+    return value.trim() !== '';
+  }).length;
+  const total = columnNodes.length;
+  const columnsDone = described === total;
 
   steps.push({
     key: 'columns',
@@ -722,6 +778,61 @@ function buildWorkflowChecklist(nodes, checklistText, checkedStepKeys = new Set(
     ...step,
     status: step.done ? 'done' : index === firstOpenIndex ? 'current' : 'pending',
   }));
+}
+
+const worksheet = workbook.Sheets[sheetName];
+const tableRows = readWorksheetRows(worksheet, transpose);
+const sheets = workbook.SheetNames.map((name) => {
+  const sheetRows = readWorksheetRows(workbook.Sheets[name], transpose);
+  const sheetColumnCount = sheetRows.reduce(
+    (maxColumns, row) => Math.max(maxColumns, row.length),
+    0,
+  );
+  const sheetHeaders = hasHeader
+    ? Array.from({ length: sheetColumnCount }, (_, index) =>
+        normalizeCellValue(sheetRows[0]?.[index]),
+      )
+    : Array.from(
+        { length: sheetColumnCount },
+        (_, index) => `Column ${index + 1}`,
+      );
+  const firstSheetDataRow = hasHeader ? 1 : 0;
+
+  return {
+    name,
+    rows: sheetRows.slice(firstSheetDataRow).map((row) =>
+      Object.fromEntries(
+        sheetHeaders.map((header, index) => [header, normalizeCellValue(row[index])]),
+      ),
+    ),
+  };
+});
+
+if (tableRows.length === 0) {
+  return { headers: [], rows: [], rowCount: 0, sheetName, sheets };
+}
+
+const columnCount = tableRows.reduce(
+  (maxColumns, row) => Math.max(maxColumns, row.length),
+  0,
+);
+const headers = hasHeader
+  ? Array.from({ length: columnCount }, (_, index) =>
+      normalizeCellValue(tableRows[0][index]),
+    )
+  : Array.from({ length: columnCount }, (_, index) => `Column ${index + 1}`);
+const firstDataRow = hasHeader ? 1 : 0;
+const rows = tableRows.slice(firstDataRow, firstDataRow + previewRowCount).map((row) =>
+  Array.from({ length: columnCount }, (_, index) => normalizeCellValue(row[index])),
+);
+
+return {
+  headers,
+  rows,
+  rowCount: Math.max(tableRows.length - firstDataRow, 0),
+  sheetName,
+  sheets,
+};
 }
 
 /**
@@ -1095,6 +1206,112 @@ function propagateCoscineApplicationProfiles(nodes, edges) {
   });
 }
 
+function propagateProfileSearchValidity(nodes, edges) {
+  const nodeTypesById = new Map(nodes.map((node) => [node.id, node.type]));
+  const coscineFormIds = new Set(
+    edges
+      .filter(
+        (edge) =>
+          nodeTypesById.get(edge.source) === 'coscine' &&
+          nodeTypesById.get(edge.target) === 'metadataForm',
+      )
+      .map((edge) => edge.target),
+  );
+
+  return nodes.map((node) => {
+    if (node.type !== 'profileSearch') return node;
+
+    const invalidated = edges.some(
+      (edge) => edge.source === node.id && coscineFormIds.has(edge.target),
+    );
+
+    return {
+      ...node,
+      data: {
+        ...node.data,
+        invalidated,
+      },
+    };
+  });
+}
+
+/**
+ * Marks Column Description nodes that are connected to a Terminology Service
+ * or Units node. The node uses these flags to enable per-column autocomplete
+ * (terminology concepts and QUDT units) next to the existing drag-and-drop.
+ */
+function annotateColumnDescriptionServiceInputs(nodes, edges) {
+  const nodeTypesById = new Map(nodes.map((node) => [node.id, node.type]));
+  const nodeDataById = new Map(nodes.map((node) => [node.id, node.data]));
+  const terminologyColumnNodeIds = new Set();
+  const unitInputByColumnNodeId = new Map();
+
+  for (const edge of edges) {
+    const sourceType = nodeTypesById.get(edge.source);
+    const targetType = nodeTypesById.get(edge.target);
+
+    if (targetType !== 'columnDescription' && targetType !== 'headerSchema') {
+      continue;
+    }
+
+    if (sourceType === 'terminology') {
+      terminologyColumnNodeIds.add(edge.target);
+    }
+
+    if (sourceType === 'unit') {
+      const sourceData = nodeDataById.get(edge.source) ?? {};
+      unitInputByColumnNodeId.set(edge.target, {
+        quantityKindFilter: sourceData.quantityKindFilter || '',
+        quantityKindLabel: sourceData.quantityKindLabel || '',
+      });
+    }
+  }
+
+  return nodes.map((node) => {
+    if (node.type !== 'columnDescription' && node.type !== 'headerSchema') {
+      return node;
+    }
+
+    return {
+      ...node,
+      data: {
+        ...node.data,
+        terminologyInput: terminologyColumnNodeIds.has(node.id),
+        unitInput: unitInputByColumnNodeId.get(node.id) ?? null,
+      },
+    };
+  });
+}
+
+function propagateProfileSearchValidity(nodes, edges) {
+  const nodeTypesById = new Map(nodes.map((node) => [node.id, node.type]));
+  const coscineFormIds = new Set(
+    edges
+      .filter(
+        (edge) =>
+          nodeTypesById.get(edge.source) === 'coscine' &&
+          nodeTypesById.get(edge.target) === 'metadataForm',
+      )
+      .map((edge) => edge.target),
+  );
+
+  return nodes.map((node) => {
+    if (node.type !== 'profileSearch') return node;
+
+    const invalidated = edges.some(
+      (edge) => edge.source === node.id && coscineFormIds.has(edge.target),
+    );
+
+    return {
+      ...node,
+      data: {
+        ...node.data,
+        invalidated,
+      },
+    };
+  });
+}
+
 /**
  * Marks Column Description nodes that are connected to a Terminology Service
  * or Units node. The node uses these flags to enable per-column autocomplete
@@ -1220,6 +1437,7 @@ function FitWorkflowView({ request }) {
   }, [fitView, getNodes, nodesInitialized, request, viewportInitialized]);
 
   return null;
+}
 }
 
 export default function App() {
@@ -1422,7 +1640,7 @@ export default function App() {
   );
 
   const onTabularLoaded = useCallback(
-    (nodeId, fileName, buffer, hasHeader, transpose, manualTranspose = false, manualHeader = false) => {
+(nodeId, fileName, buffer, hasHeader = true, transpose = false, manualTranspose = false, manualHeader = false) => {
       tabularRdfConversionsRef.current.get(nodeId)?.abort();
       tabularRdfConversionsRef.current.delete(nodeId);
       const preview = parseTabularWorkbook(buffer, 5, hasHeader, transpose);
@@ -1484,6 +1702,11 @@ export default function App() {
           loadedFile.buffer,
           hasHeader,
           node?.data.transpose === true,
+          loadedFile.buffer,
+          node?.data.hasHeaderManuallySet ? node?.data.hasHeader === true : undefined,
+          node?.data.transposeManuallySet === true,
+          true,
+        );
           node?.data.transposeManuallySet === true,
           true,
         );
@@ -1522,6 +1745,9 @@ export default function App() {
 
       setNodes((currentNodes) => {
         const nextNodes = currentNodes.map((candidate) =>
+          candidate.id === nodeId
+            ? { ...candidate, data: { ...candidate.data, transpose, transposeManuallySet: true } }
+            : candidate,
           candidate.id === nodeId
             ? { ...candidate, data: { ...candidate.data, transpose, transposeManuallySet: true } }
             : candidate,

@@ -219,6 +219,12 @@ body {
   right: 16px;
   z-index: 12;
   display: grid;
+  right: 16px;
+  z-index: 12;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
@@ -854,7 +860,6 @@ body {
 .tabular-file-node__advanced summary {
   cursor: pointer;
 }
-
 .tabular-file-node__meta {
   margin: 8px 0 0;
   font-size: 0.75rem;
