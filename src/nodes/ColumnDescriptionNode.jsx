@@ -19,7 +19,6 @@ import NodeInfoButton from './NodeInfoButton';
 
 const UNIT_DRAG_MIME_TYPE = 'application/tabulatrdm-unit';
 const TERM_DRAG_MIME_TYPE = 'application/tabulatrdm-term';
-
 const SUGGESTION_DEBOUNCE_MS = 300;
 const MIN_SUGGESTION_QUERY_LENGTH = 2;
 const MAX_SUGGESTIONS = 8;

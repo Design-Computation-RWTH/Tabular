@@ -113,6 +113,24 @@ const instructions = {
         'Prufe Bezeichnung, Definition, Ontologie und persistenten Identifikator der Ergebnisse.',
         'Offne einen Begriff in einem neuen Tab oder ziehe ihn in ein Spaltenbeschreibungsfeld; die Bezeichnung wird angezeigt und die persistente IRI bleibt erhalten.',
         'Verbinde diesen Knoten mit der Spaltenbeschreibung, um direkt in jedem Beschreibungsfeld beim Tippen zu suchen.',
+  terminology: {
+    en: {
+      title: 'Terminology Service',
+      steps: [
+        'Enter a word or phrase to search terminology concepts through the official NFDI4Ing OLS4 API.',
+        'Review each result’s label, definition, ontology, and persistent identifier.',
+        'Open a concept in a new tab or drag it into a Column Description field; its label is shown while its persistent IRI is retained.',
+      ],
+    },
+    de: {
+      title: 'Terminologiedienst',
+      steps: [
+        'Gib ein Wort oder eine Wortgruppe ein, um Begriffe uber die offizielle NFDI4Ing-OLS4-API zu suchen.',
+        'Prufe Bezeichnung, Definition, Ontologie und persistenten Identifikator der Ergebnisse.',
+        'Offne einen Begriff in einem neuen Tab oder ziehe ihn in ein Spaltenbeschreibungsfeld; die Bezeichnung wird angezeigt und die persistente IRI bleibt erhalten.',
+      ],
+    },
+  },
       ],
     },
   },
@@ -141,6 +159,7 @@ const instructions = {
         'Use the loaded SHACL form to enter dataset metadata.',
         'Forms can come from Metadata Profile Search or from a connected Coscine node.',
         'Valid form entries are emitted as RDF automatically. No separate save step is needed.',
+        'Save the form to emit RDF for connected RO-Crate nodes.',
       ],
     },
     de: {
@@ -149,6 +168,7 @@ const instructions = {
         'Trage Datensatz-Metadaten in das geladene SHACL-Formular ein.',
         'Formulare konnen aus der Metadatenprofil-Suche oder aus einem verbundenen Coscine-Knoten kommen.',
         'Gueltige Formulareintraege werden automatisch als RDF ausgegeben. Ein separates Speichern ist nicht noetig.',
+        'Speichere das Formular, um RDF fur verbundene RO-Crate-Knoten auszugeben.',
       ],
     },
   },
