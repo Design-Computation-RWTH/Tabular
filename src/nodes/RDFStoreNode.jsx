@@ -181,7 +181,10 @@ export default function RDFStoreNode({ data, selected }) {
 
   return (
     <div className={`rdf-node${selected ? ' selected' : ''}`}>
-      <NodeHandle type="target" />
+      <NodeHandle
+        type="target"
+        accepts={['Metadata Form', 'Column Descriptions']}
+      />
       <div className="rdf-node__header">
         <img src={rdfLogo} alt="" className="rdf-node__icon" />
         <p className="rdf-node__title">{data.label}</p>
@@ -209,7 +212,7 @@ export default function RDFStoreNode({ data, selected }) {
       {status ? <p className="rdf-node__status">{status}</p> : null}
       {error ? <p className="rdf-node__error">{error}</p> : null}
       <NodeInfoButton nodeType="rdfStore" language={data.language} />
-      <NodeHandle type="source" />
+      <NodeHandle type="source" connectsTo={['RO-Crate']} />
     </div>
   );
 }
